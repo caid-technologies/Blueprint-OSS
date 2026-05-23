@@ -1,0 +1,270 @@
+{
+  "hardware_ir_version": "0.1",
+  "overview": {
+    "title": "Auto-Grow Plant Moisture Monitor & Watering System",
+    "description": "An automated soil-sensing irrigation and environment dashboard.",
+    "difficulty": "Intermediate",
+    "estimated_cost": 11.00,
+    "category": "Smart Home"
+  },
+  "requirements": {
+    "requirements": [
+      "Monitor real-time soil moisture and environmental temperature.",
+      "Turn on a 5V relay to activate an irrigation water pump when moisture drops below 30%.",
+      "Display current soil and environmental readings on a sharp 0.96 inch OLED screen.",
+      "Log all data points and warnings over a WiFi-connected database endpoint."
+    ],
+    "power_needs": "5V USB Wall Supply, powering MCU, Relay, and OLED screen.",
+    "operating_voltage": 3.3,
+    "physical_constraints": [
+      "Water-resistant sensor probes.",
+      "Enclosure footprint under 10x10x5cm."
+    ],
+    "safety_notes": [
+      "Keep relay AC connection/switching terminals isolated from water lines.",
+      "Operate pump with separate power grounds if electrical noise interferes with readings."
+    ],
+    "missing_info": []
+  },
+  "components": [
+    {
+      "ref_des": "U1",
+      "part_number": "ESP32-WROOM-32D",
+      "name": "ESP32 NodeMCU Development Board",
+      "category": "Microcontroller",
+      "quantity": 1,
+      "unit_price": 4.50,
+      "rationale": "Provides dual core processor, WiFi connectivity, and plenty of GPIOs for sensor and relay control.",
+      "pins": [
+        {"pin_id": "3V3", "name": "3.3V Power Out", "pin_type": "Power", "voltage": 3.3, "description": "3.3V Regulated Output"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "System Ground Reference"},
+        {"pin_id": "EN", "name": "Enable / Reset", "pin_type": "Passive", "voltage": 3.3, "description": "Reset pin, active low"},
+        {"pin_id": "D25", "name": "GPIO25 / DAC_CH1", "pin_type": "Digital", "voltage": 3.3, "description": "DAC / General GPIO"},
+        {"pin_id": "D22", "name": "GPIO22 / I2C_SCL", "pin_type": "I2C", "voltage": 3.3, "description": "Primary I2C SCL"},
+        {"pin_id": "D21", "name": "GPIO21 / I2C_SDA", "pin_type": "I2C", "voltage": 3.3, "description": "Primary I2C SDA"},
+        {"pin_id": "D27", "name": "GPIO27 / ADC_CH17", "pin_type": "Digital", "voltage": 3.3, "description": "General GPIO"},
+        {"pin_id": "VIN", "name": "External Power In", "pin_type": "Power", "voltage": 5.0, "description": "5V Unregulated Input"}
+      ]
+    },
+    {
+      "ref_des": "SEN1",
+      "part_number": "DHT22",
+      "name": "DHT22 Temperature & Humidity Sensor",
+      "category": "Sensor",
+      "quantity": 1,
+      "unit_price": 2.80,
+      "rationale": "Collects environmental temperature and relative humidity to guard against heat-stress.",
+      "pins": [
+        {"pin_id": "VCC", "name": "VCC Power", "pin_type": "Power", "voltage": 3.3, "description": "Supports 3.3V to 5.0V Supply"},
+        {"pin_id": "DATA", "name": "Signal Out", "pin_type": "Digital", "voltage": 3.3, "description": "Single-wire digital data out (requires pullup)"},
+        {"pin_id": "NC", "name": "No Connection", "pin_type": "Passive", "voltage": 0.0, "description": "Do not connect"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "Power ground reference"}
+      ]
+    },
+    {
+      "ref_des": "ACT1",
+      "part_number": "Relay-5V-1Ch",
+      "name": "5V 1-Channel Optocoupled Relay Module",
+      "category": "Actuator",
+      "quantity": 1,
+      "unit_price": 1.20,
+      "rationale": "Safely switches power to the 5V water pump actuator using low-voltage ESP32 GPIO pins.",
+      "pins": [
+        {"pin_id": "VCC", "name": "Module Power (5V)", "pin_type": "Power", "voltage": 5.0, "description": "5V Relay coil power"},
+        {"pin_id": "GND", "name": "Module Ground", "pin_type": "Ground", "voltage": 0.0, "description": "System Ground"},
+        {"pin_id": "IN", "name": "Signal Input", "pin_type": "Digital", "voltage": 5.0, "description": "Logic input to trigger coil (optocoupled)"},
+        {"pin_id": "COM", "name": "Switch Common Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "High-power common pole"},
+        {"pin_id": "NO", "name": "Switch Normally Open Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "Connected to COM only when energized"},
+        {"pin_id": "NC", "name": "Switch Normally Closed Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "Connected to COM by default"}
+      ]
+    },
+    {
+      "ref_des": "DISP1",
+      "part_number": "SSD1306-I2C",
+      "name": "0.96 inch OLED Display (I2C)",
+      "category": "Display",
+      "quantity": 1,
+      "unit_price": 2.50,
+      "rationale": "Displays quick status updates, soil moisture %, and humidity readouts locally.",
+      "pins": [
+        {"pin_id": "VCC", "name": "Power VCC", "pin_type": "Power", "voltage": 3.3, "description": "Supports 3.3V or 5V Power Input"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "Ground Reference"},
+        {"pin_id": "SCL", "name": "I2C Serial Clock", "pin_type": "I2C", "voltage": 3.3, "description": "I2C SCL"},
+        {"pin_id": "SDA", "name": "I2C Serial Data", "pin_type": "I2C", "voltage": 3.3, "description": "I2C SDA"}
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "net_id": "NET_GND",
+      "name": "System Ground",
+      "net_type": "Ground",
+      "voltage": 0.0,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "GND"},
+        {"ref_des": "SEN1", "pin_id": "GND"},
+        {"ref_des": "ACT1", "pin_id": "GND"},
+        {"ref_des": "DISP1", "pin_id": "GND"}
+      ]
+    },
+    {
+      "net_id": "NET_3V3",
+      "name": "3.3V Power Rail",
+      "net_type": "Power",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "3V3"},
+        {"ref_des": "SEN1", "pin_id": "VCC"},
+        {"ref_des": "DISP1", "pin_id": "VCC"}
+      ]
+    },
+    {
+      "net_id": "NET_5V",
+      "name": "5V Power Rail",
+      "net_type": "Power",
+      "voltage": 5.0,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "VIN"},
+        {"ref_des": "ACT1", "pin_id": "VCC"}
+      ]
+    },
+    {
+      "net_id": "NET_I2C_SDA",
+      "name": "I2C Serial Data",
+      "net_type": "I2C",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D21"},
+        {"ref_des": "DISP1", "pin_id": "SDA"}
+      ]
+    },
+    {
+      "net_id": "NET_I2C_SCL",
+      "name": "I2C Serial Clock",
+      "net_type": "I2C",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D22"},
+        {"ref_des": "DISP1", "pin_id": "SCL"}
+      ]
+    },
+    {
+      "net_id": "NET_DHT_DATA",
+      "name": "DHT22 Sensor Connection",
+      "net_type": "Digital",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D27"},
+        {"ref_des": "SEN1", "pin_id": "DATA"}
+      ]
+    },
+    {
+      "net_id": "NET_RELAY_IN",
+      "name": "Relay Command Line",
+      "net_type": "Digital",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D25"},
+        {"ref_des": "ACT1", "pin_id": "IN"}
+      ]
+    }
+  ],
+  "buses": [
+    {
+      "bus_id": "BUS_I2C_1",
+      "bus_type": "I2C",
+      "clock_frequency_hz": 100000.0,
+      "nets": ["NET_I2C_SDA", "NET_I2C_SCL"]
+    }
+  ],
+  "pin_mappings": [
+    {"mcu_pin": "D21", "connected_to": "SSD1306 SDA Pin", "net_name": "NET_I2C_SDA"},
+    {"mcu_pin": "D22", "connected_to": "SSD1306 SCL Pin", "net_name": "NET_I2C_SCL"},
+    {"mcu_pin": "D27", "connected_to": "DHT22 Sensor Pin", "net_name": "NET_DHT_DATA"},
+    {"mcu_pin": "D25", "connected_to": "Relay Switch Command", "net_name": "NET_RELAY_IN"}
+  ],
+  "assembly": [
+    {
+      "step_num": 1,
+      "title": "Prepare Components & Power rails",
+      "description": "Place the ESP32 board onto a half-sized breadboard. Connect the ESP32 3V3 pin to the red rail and GND pin to the blue rail. Run a secondary VIN wire to feed 5V power to the Actuators later.",
+      "danger_flag": false,
+      "affected_components": ["U1"]
+    },
+    {
+      "step_num": 2,
+      "title": "Assemble & Power the DHT22 Temperature Sensor",
+      "description": "Connect DHT22 Pin 1 (VCC) to the 3.3V breadboard rail. Connect Pin 4 (GND) to the GND rail. Connect DHT22 Pin 2 (DATA) directly to the ESP32 pin D27. Place a 10k resistor between VCC and DATA to act as an external pull-up if necessary.",
+      "danger_flag": false,
+      "affected_components": ["SEN1", "U1"]
+    },
+    {
+      "step_num": 3,
+      "title": "Wire up the SSD1306 OLED Display over I2C",
+      "description": "Mount the OLED screen. Run VCC to 3.3V, GND to GND, SDA to ESP32 Pin D21, and SCL to ESP32 Pin D22. This sets up the serial hardware bus.",
+      "danger_flag": false,
+      "affected_components": ["DISP1", "U1"]
+    },
+    {
+      "step_num": 4,
+      "title": "Install and Wire the 5V Relay Module",
+      "description": "Connect Relay VCC to ESP32 VIN (5V rail) and GND to system ground. Connect the signal input (IN) of the relay to ESP32 Pin D25.",
+      "danger_flag": true,
+      "danger_message": "Never connect AC mains electricity to the relay terminals without proper enclosure insulated blocks!",
+      "affected_components": ["ACT1", "U1"]
+    }
+  ],
+  "mechanical": {
+    "enclosure_type": "3D Printed",
+    "mounting_guidance": "Use M3 brass standoffs inside a pre-measured PLA project box. Drill rubber routing holes for moisture probes and power.",
+    "fabrication_details": [
+      "Wall thickness: 2.0mm.",
+      "Infill: 20% grid pattern.",
+      "Material: Green or Black PLA.",
+      "Ventilation grills on the side of the housing to keep the DHT22 breathing correctly."
+    ],
+    "manufacturability_rating": "Easy"
+  },
+  "constraints": [
+    "Water-resistant sensor probes.",
+    "Enclosure footprint under 10x10x5cm.",
+    "Operating Voltage: 3.3V"
+  ],
+  "power_rails": [
+    {
+      "rail_id": "RAIL_3V3",
+      "voltage": 3.3,
+      "max_current_capacity_ma": 500.0,
+      "source_component": "U1"
+    },
+    {
+      "rail_id": "RAIL_5V",
+      "voltage": 5.0,
+      "max_current_capacity_ma": 1000.0,
+      "source_component": "U1"
+    }
+  ],
+  "estimated_current_draw_ma": 180.0,
+  "fabrication_notes": [
+    "Wall thickness: 2.0mm.",
+    "Infill: 20% grid pattern.",
+    "Material: Green or Black PLA.",
+    "Ventilation grills on the side of the housing to keep the DHT22 breathing correctly."
+  ],
+  "assembly_metadata": {
+    "status": "active",
+    "revision": 1
+  },
+  "project_version_history": [
+    {
+      "version": "0.1",
+      "description": "Initial fallback design generation"
+    }
+  ],
+  "validation": {
+    "critical": [],
+    "warning": [],
+    "info": []
+  },
+  "is_valid": true
+}

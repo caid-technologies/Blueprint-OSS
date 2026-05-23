@@ -1,0 +1,207 @@
+{
+  "overview": {
+    "title": "Smart Nest-Style Environmental Thermostat Controller",
+    "description": "Intelligent wall-mounted environment controller with climate regulation.",
+    "difficulty": "Intermediate",
+    "estimated_cost": 15.50,
+    "category": "Smart Home"
+  },
+  "requirements": {
+    "requirements": [
+      "Collect high-precision altitude, pressure, and ambient temperature readings.",
+      "Display custom menu, heat indices, and setpoint targets on OLED.",
+      "Actuate solid-state heating elements or fan control through an optoisolated relay switch.",
+      "Maintain low-power standby during battery backups."
+    ],
+    "power_needs": "Dual Power supply: 3.7V rechargeable Lithium backup with 5V stationary adapter feed.",
+    "operating_voltage": 3.3,
+    "physical_constraints": [
+      "Standard wall box mounting.",
+      "Total weight under 150g."
+    ],
+    "safety_notes": [
+      "Incorporate thermal fusing if controlling resistive heater elements.",
+      "Double check voltage bounds before wiring rechargeable LiPos."
+    ],
+    "missing_info": []
+  },
+  "components": [
+    {
+      "ref_des": "U1",
+      "part_number": "ESP32-WROOM-32D",
+      "name": "ESP32 NodeMCU Development Board",
+      "category": "Microcontroller",
+      "quantity": 1,
+      "unit_price": 4.50,
+      "rationale": "Onboard Bluetooth and WiFi allow web setpoints, scheduling, and logging integrations.",
+      "pins": [
+        {"pin_id": "3V3", "name": "3.3V Power Out", "pin_type": "Power", "voltage": 3.3, "description": "3.3V Regulated Output"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "System Ground Reference"},
+        {"pin_id": "D25", "name": "GPIO25", "pin_type": "Digital", "voltage": 3.3, "description": "General GPIO"},
+        {"pin_id": "D22", "name": "GPIO22 / I2C_SCL", "pin_type": "I2C", "voltage": 3.3, "description": "Primary I2C SCL"},
+        {"pin_id": "D21", "name": "GPIO21 / I2C_SDA", "pin_type": "I2C", "voltage": 3.3, "description": "Primary I2C SDA"},
+        {"pin_id": "VIN", "name": "External Power In", "pin_type": "Power", "voltage": 5.0, "description": "5V Unregulated Input"}
+      ]
+    },
+    {
+      "ref_des": "SEN1",
+      "part_number": "BMP280",
+      "name": "BMP280 Barometric Pressure & Temp Sensor",
+      "category": "Sensor",
+      "quantity": 1,
+      "unit_price": 1.80,
+      "rationale": "Performs precision temperature tracking to regulate comfortable setpoints within 0.1C.",
+      "pins": [
+        {"pin_id": "VCC", "name": "Power VCC", "pin_type": "Power", "voltage": 3.3, "description": "1.8V to 3.6V Supply Input"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "Ground"},
+        {"pin_id": "SCL", "name": "I2C SCL", "pin_type": "I2C", "voltage": 3.3, "description": "Clock Pin"},
+        {"pin_id": "SDA", "name": "I2C SDA", "pin_type": "I2C", "voltage": 3.3, "description": "Data Input/Output Pin"}
+      ]
+    },
+    {
+      "ref_des": "ACT1",
+      "part_number": "Relay-5V-1Ch",
+      "name": "5V 1-Channel Optocoupled Relay Module",
+      "category": "Actuator",
+      "quantity": 1,
+      "unit_price": 1.20,
+      "rationale": "Switches active HVAC furnace control logic safely.",
+      "pins": [
+        {"pin_id": "VCC", "name": "Module Power (5V)", "pin_type": "Power", "voltage": 5.0, "description": "5V Relay coil power"},
+        {"pin_id": "GND", "name": "Module Ground", "pin_type": "Ground", "voltage": 0.0, "description": "System Ground"},
+        {"pin_id": "IN", "name": "Signal Input", "pin_type": "Digital", "voltage": 5.0, "description": "Logic input to trigger coil (optocoupled)"},
+        {"pin_id": "COM", "name": "Switch Common Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "High-power common pole"},
+        {"pin_id": "NO", "name": "Switch Normally Open Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "Connected to COM only when energized"},
+        {"pin_id": "NC", "name": "Switch Normally Closed Terminal", "pin_type": "Passive", "voltage": 250.0, "description": "Connected to COM by default"}
+      ]
+    },
+    {
+      "ref_des": "DISP1",
+      "part_number": "SSD1306-I2C",
+      "name": "0.96 inch OLED Display (I2C)",
+      "category": "Display",
+      "quantity": 1,
+      "unit_price": 2.50,
+      "rationale": "Renders a real-time UI showing current temp vs user target setpoints.",
+      "pins": [
+        {"pin_id": "VCC", "name": "Power VCC", "pin_type": "Power", "voltage": 3.3, "description": "Supports 3.3V or 5V Power Input"},
+        {"pin_id": "GND", "name": "Ground", "pin_type": "Ground", "voltage": 0.0, "description": "Ground Reference"},
+        {"pin_id": "SCL", "name": "I2C Serial Clock", "pin_type": "I2C", "voltage": 3.3, "description": "I2C SCL"},
+        {"pin_id": "SDA", "name": "I2C Serial Data", "pin_type": "I2C", "voltage": 3.3, "description": "I2C SDA"}
+      ]
+    },
+    {
+      "ref_des": "BAT1",
+      "part_number": "Battery-LiPo-3.7V",
+      "name": "3.7V Lithium Polymer Battery (1200mAh)",
+      "category": "Power",
+      "quantity": 1,
+      "unit_price": 5.50,
+      "rationale": "Supports emergency battery backup should a domestic utility power cutout occur.",
+      "pins": [
+        {"pin_id": "POS", "name": "Positive Lead (Red)", "pin_type": "Power", "voltage": 3.7, "description": "Positive terminal"},
+        {"pin_id": "NEG", "name": "Negative Lead (Black)", "pin_type": "Ground", "voltage": 0.0, "description": "Negative reference terminal"}
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "net_id": "NET_GND",
+      "name": "Ground Wire",
+      "net_type": "Ground",
+      "voltage": 0.0,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "GND"},
+        {"ref_des": "SEN1", "pin_id": "GND"},
+        {"ref_des": "ACT1", "pin_id": "GND"},
+        {"ref_des": "DISP1", "pin_id": "GND"},
+        {"ref_des": "BAT1", "pin_id": "NEG"}
+      ]
+    },
+    {
+      "net_id": "NET_3V3",
+      "name": "3.3V Power Line",
+      "net_type": "Power",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "3V3"},
+        {"ref_des": "SEN1", "pin_id": "VCC"},
+        {"ref_des": "DISP1", "pin_id": "VCC"}
+      ]
+    },
+    {
+      "net_id": "NET_I2C_SDA",
+      "name": "I2C Serial Data",
+      "net_type": "I2C",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D21"},
+        {"ref_des": "DISP1", "pin_id": "SDA"},
+        {"ref_des": "SEN1", "pin_id": "SDA"}
+      ]
+    },
+    {
+      "net_id": "NET_I2C_SCL",
+      "name": "I2C Serial Clock",
+      "net_type": "I2C",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D22"},
+        {"ref_des": "DISP1", "pin_id": "SCL"},
+        {"ref_des": "SEN1", "pin_id": "SCL"}
+      ]
+    },
+    {
+      "net_id": "NET_RELAY_CTRL",
+      "name": "Furnace Control Net",
+      "net_type": "Digital",
+      "voltage": 3.3,
+      "pins": [
+        {"ref_des": "U1", "pin_id": "D25"},
+        {"ref_des": "ACT1", "pin_id": "IN"}
+      ]
+    }
+  ],
+  "pin_mappings": [
+    {"mcu_pin": "D21", "connected_to": "OLED/BMP280 Data", "net_name": "NET_I2C_SDA"},
+    {"mcu_pin": "D22", "connected_to": "OLED/BMP280 Clock", "net_name": "NET_I2C_SCL"},
+    {"mcu_pin": "D25", "connected_to": "Climate Control Relay Trigger", "net_name": "NET_RELAY_CTRL"}
+  ],
+  "assembly": [
+    {
+      "step_num": 1,
+      "title": "Wire power and Backup Battery",
+      "description": "Seat the ESP32 on your proto-board. Plug the 3.7V battery POS wire into ESP32 VIN or designated LiPo charger interface. Ground negative to ESP32 GND.",
+      "danger_flag": true,
+      "danger_message": "Avoid puncturing, bending, or shorting battery terminals! Lithium batteries store immense charge.",
+      "affected_components": ["U1", "BAT1"]
+    },
+    {
+      "step_num": 2,
+      "title": "Construct Shared I2C Bus",
+      "description": "Connect SCL on both OLED and BMP280 to ESP32 Pin D22. Connect SDA on both display and pressure sensor to ESP32 Pin D21. Power them with 3.3V power rails and verify no crosstalk.",
+      "danger_flag": false,
+      "affected_components": ["SEN1", "DISP1", "U1"]
+    },
+    {
+      "step_num": 3,
+      "title": "Integrate HVAC Switching relay",
+      "description": "Power the relay coil with 5V VIN. Send input line (IN) to ESP32 GPIO pin D25. Route furnace control lines into Normally Open (NO) and Common (COM) blocks.",
+      "danger_flag": true,
+      "danger_message": "Unplug structural heating supplies before hooking up high voltage terminals!",
+      "affected_components": ["ACT1", "U1"]
+    }
+  ],
+  "mechanical": {
+    "enclosure_type": "Custom Acrylic",
+    "mounting_guidance": "Screw back-plate onto dry-wall with standard drywall screws. Clip the acrylic cover overlay on top for clean bezel appearance.",
+    "fabrication_details": [
+      "Front-facing slot for BMP280 air-exposure.",
+      "Laser cut clear acrylic viewing window.",
+      "Mounting holes spaced 60mm vertically to match US wall standards."
+    ],
+    "manufacturability_rating": "Moderate"
+  },
+  "validation_issues": [],
+  "is_valid": true
+}

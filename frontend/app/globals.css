@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #0b0d19;
+  color: #f1f5f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+/* Custom styles for React Flow handles and cards to make it look like a CAD editor */
+.react-flow__node {
+  border-radius: 12px;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background-color: #0b0d19 !important;
+  border: 2px solid #00d2ff !important;
+}
+
+.react-flow__edge-path {
+  stroke-dashoffset: 0;
+  animation: dash 20s linear infinite;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #ff007f !important;
+}
+
+@keyframes dash {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Scrollbar customization for a clean tech look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f1123;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Technical HUD pulse animation */
+@keyframes tech-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.9; }
+}
+
+.tech-pulse {
+  animation: tech-pulse 2s infinite;
+}
