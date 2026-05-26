@@ -85,6 +85,3 @@ Tip: load an example directly with http://localhost:3000/?example=pocket_mp3_pla
 - [Development](docs/development.md)
 - [Examples](docs/examples.md)
 - [Roadmap](docs/roadmap.md)
-
-## Screenshots (placeholder)
-![Blueprint UI placeholder](docs/assets/ui-placeholder.svg)
