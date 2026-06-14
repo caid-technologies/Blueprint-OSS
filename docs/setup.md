@@ -31,6 +31,9 @@ STRICT_LLM=true
 # Optional first-party OpenAI settings
 # OPENAI_RESPONSE_FORMAT=json_schema
 # OPENAI_VALIDATE_MODELS=false
+# OPENAI_TIMEOUT_SECONDS=300
+# OPENAI_REASONING_EFFORT=low
+# OPENAI_TEMPERATURE=1
 # OPENAI_PROJECT_ID=your_openai_project_id_here
 # OPENAI_ORG_ID=your_openai_org_id_here
 
@@ -51,6 +54,9 @@ OPENAI_IMAGE_SIZE=1024x1024
 # LLM_PROVIDER=openai-compatible
 # LLM_BASE_URL=http://localhost:11434/v1
 # LLM_ALLOW_NO_API_KEY=true
+# LLM_TIMEOUT_SECONDS=90
+# LLM_REASONING_EFFORT=low
+# LLM_TEMPERATURE=0.2
 
 # Optional TCP JSONL A2A socket
 JOB_METADATA_DB_PATH=./blueprint_jobs.db
@@ -64,12 +70,18 @@ Notes:
 - `LLM_PROVIDER` can be `gemini`, `openai`, `openai-compatible`, or `simulation`.
 - `OPENAI_API_KEY` enables first-party OpenAI live structured generation when `LLM_PROVIDER=openai`.
 - `OPENAI_RESPONSE_FORMAT` defaults to `json_schema` for OpenAI. You can set it to `json_object` for older JSON mode or `none` to omit `response_format`.
+- `OPENAI_TIMEOUT_SECONDS` controls the per-request OpenAI read timeout and defaults to `300`.
+- `OPENAI_REASONING_EFFORT` can lower latency for GPT-5/o-series reasoning models, for example `low`.
+- `OPENAI_TEMPERATURE` is optional and omitted by default for first-party OpenAI so models that only support their default temperature can run.
 - `OPENAI_PROJECT_ID` and `OPENAI_ORG_ID` are optional routing headers for accounts that need explicit project or organization selection.
 - `IMAGE_OUTPUT_ENABLED=true` makes generated product concept images the default. Leave it `false` and use the UI checkbox or `generate_image=true` API flag to opt in per job.
 - `IMAGE_PROVIDER` can be `openai`, `openai-compatible`, or `none`.
 - `OPENAI_IMAGE_MODEL` selects the image model. The example default is `gpt-image-2`.
 - `OPENAI_IMAGE_SIZE`, `OPENAI_IMAGE_QUALITY`, and `OPENAI_IMAGE_OUTPUT_FORMAT` tune generated image output.
 - `LLM_API_KEY` is a generic provider key alias. Gemini aliases (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) are still supported.
+- `LLM_TIMEOUT_SECONDS` controls the generic provider read timeout. OpenAI-compatible endpoints default to `90`.
+- `LLM_REASONING_EFFORT` passes reasoning effort to compatible endpoints that support it.
+- `LLM_TEMPERATURE` controls generic provider sampling. OpenAI-compatible endpoints default to `0.2`; set `default`, `none`, or `omit` to omit it.
 - With `STRICT_LLM=true`, generation fails fast when model availability validation is enabled and `LLM_MODEL` is unavailable.
 - With `STRICT_LLM=false`, the backend may fall back to `LLM_FALLBACK_MODEL`.
 - OpenAI-compatible endpoints can use `LLM_BASE_URL`; local endpoints that do not require auth can set `LLM_ALLOW_NO_API_KEY=true`.

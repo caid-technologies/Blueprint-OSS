@@ -43,12 +43,18 @@ LLM configuration behavior:
 - `OPENAI_API_KEY`: first-party OpenAI API key when `LLM_PROVIDER=openai`
 - `OPENAI_MODEL`: first-party OpenAI model alias for `LLM_MODEL`
 - `OPENAI_RESPONSE_FORMAT`: OpenAI response format, defaulting to `json_schema`; `json_object` and `none` are also supported
+- `OPENAI_TIMEOUT_SECONDS`: first-party OpenAI read timeout, defaulting to `300`
+- `OPENAI_REASONING_EFFORT`: optional reasoning effort for GPT-5/o-series models, for example `low`
+- `OPENAI_TEMPERATURE`: optional first-party OpenAI sampling temperature. Omitted by default so models that only support their default temperature can run
 - `OPENAI_PROJECT_ID` / `OPENAI_ORG_ID`: optional OpenAI project and organization routing headers
 - `IMAGE_OUTPUT_ENABLED=true`: make product concept image generation the default. Requests can opt in per job with `generate_image=true`
 - `IMAGE_PROVIDER`: `openai`, `openai-compatible`, or `none`
 - `OPENAI_IMAGE_MODEL`: first-party OpenAI image model, for example `gpt-image-2`
 - `OPENAI_IMAGE_SIZE`: image output size, for example `1024x1024`
 - `LLM_FALLBACK_MODEL`: optional fallback model
+- `LLM_TIMEOUT_SECONDS`: generic read timeout. OpenAI-compatible endpoints default to `90`
+- `LLM_REASONING_EFFORT`: optional generic reasoning effort for compatible endpoints that support it
+- `LLM_TEMPERATURE`: optional generic sampling temperature. OpenAI-compatible endpoints default to `0.2`; set `default`, `none`, or `omit` to omit it
 - `STRICT_LLM=true` (default) fails fast when model availability validation is enabled and the requested model is unavailable
 - `STRICT_LLM=false` allows fallback to the configured fallback model
 - Gemini-specific env vars remain supported as aliases for existing deployments

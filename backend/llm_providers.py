@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 90.0
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 300.0
 
 
 class LLMProviderConfigError(RuntimeError):
@@ -98,6 +100,36 @@ def _first_env_float(names: List[str], default: float) -> float:
     except ValueError:
         logger.warning("Invalid timeout value %r; using %.1fs.", raw_value, default)
         return default
+
+
+def _first_env_optional_float(names: List[str], default: Optional[float] = None) -> Optional[float]:
+    raw_value = _first_env(names)
+    if raw_value is None:
+        return default
+
+    if raw_value.strip().lower() in {"default", "none", "omit"}:
+        return None
+
+    try:
+        return float(raw_value)
+    except ValueError:
+        logger.warning("Invalid float value %r; using %r.", raw_value, default)
+        return default
+
+
+def _first_env_optional_string(
+    names: List[str],
+    default: Optional[str] = None,
+    omit_values: Optional[List[str]] = None,
+) -> Optional[str]:
+    raw_value = _first_env(names)
+    if raw_value is None:
+        return default
+
+    value = raw_value.strip()
+    if omit_values and value.lower() in omit_values:
+        return None
+    return value
 
 
 def _first_env_int(names: List[str]) -> Optional[int]:
@@ -431,6 +463,8 @@ class OpenAICompatibleProvider(StructuredLLMProvider):
             response_format_names = ["OPENAI_RESPONSE_FORMAT", "LLM_RESPONSE_FORMAT"]
             timeout_names = ["OPENAI_TIMEOUT_SECONDS", "LLM_TIMEOUT_SECONDS"]
             max_tokens_names = ["OPENAI_MAX_TOKENS", "LLM_MAX_TOKENS"]
+            temperature_names = ["OPENAI_TEMPERATURE", "LLM_TEMPERATURE"]
+            reasoning_effort_names = ["OPENAI_REASONING_EFFORT", "LLM_REASONING_EFFORT"]
             allow_no_api_key_names = ["OPENAI_ALLOW_NO_API_KEY", "LLM_ALLOW_NO_API_KEY"]
         else:
             api_key_names = ["LLM_API_KEY", "OPENAI_API_KEY"]
@@ -442,6 +476,8 @@ class OpenAICompatibleProvider(StructuredLLMProvider):
             response_format_names = ["LLM_RESPONSE_FORMAT", "OPENAI_RESPONSE_FORMAT"]
             timeout_names = ["LLM_TIMEOUT_SECONDS", "OPENAI_TIMEOUT_SECONDS"]
             max_tokens_names = ["LLM_MAX_TOKENS", "OPENAI_MAX_TOKENS"]
+            temperature_names = ["LLM_TEMPERATURE", "OPENAI_TEMPERATURE"]
+            reasoning_effort_names = ["LLM_REASONING_EFFORT", "OPENAI_REASONING_EFFORT"]
             allow_no_api_key_names = ["LLM_ALLOW_NO_API_KEY", "OPENAI_ALLOW_NO_API_KEY"]
 
         self.api_key = _first_env(api_key_names)
@@ -459,8 +495,21 @@ class OpenAICompatibleProvider(StructuredLLMProvider):
             _first_env(response_format_names, default_response_format)
             or default_response_format
         ).strip().lower().replace("-", "_")
-        self.timeout_seconds = _first_env_float(timeout_names, DEFAULT_TIMEOUT_SECONDS)
+        default_timeout_seconds = (
+            DEFAULT_OPENAI_TIMEOUT_SECONDS
+            if self.provider_name == "openai"
+            else DEFAULT_TIMEOUT_SECONDS
+        )
+        self.timeout_seconds = _first_env_float(timeout_names, default_timeout_seconds)
         self.max_tokens = _first_env_int(max_tokens_names)
+        self.temperature = _first_env_optional_float(
+            temperature_names,
+            default=None if self.provider_name == "openai" else 0.2,
+        )
+        self.reasoning_effort = _first_env_optional_string(
+            reasoning_effort_names,
+            omit_values=["default", "omit"],
+        )
         self.allow_no_api_key = _first_env_bool(
             allow_no_api_key_names,
             default=self.provider_name != "openai" and configured_base_url is not None,
@@ -496,7 +545,17 @@ class OpenAICompatibleProvider(StructuredLLMProvider):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"{self.provider_name} request failed with HTTP {exc.code}: {detail[:500]}") from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise RuntimeError(
+                f"{self.provider_name} request timed out after {self.timeout_seconds:.1f}s while reading {path}. "
+                "Increase OPENAI_TIMEOUT_SECONDS/LLM_TIMEOUT_SECONDS or use a lower-latency model/settings."
+            ) from exc
         except urllib.error.URLError as exc:
+            if isinstance(getattr(exc, "reason", None), (socket.timeout, TimeoutError)):
+                raise RuntimeError(
+                    f"{self.provider_name} request timed out after {self.timeout_seconds:.1f}s while reading {path}. "
+                    "Increase OPENAI_TIMEOUT_SECONDS/LLM_TIMEOUT_SECONDS or use a lower-latency model/settings."
+                ) from exc
             raise RuntimeError(f"{self.provider_name} request failed: {exc}") from exc
 
         if not body.strip():
@@ -690,8 +749,13 @@ class OpenAICompatibleProvider(StructuredLLMProvider):
                     "content": self._build_user_content(prompt, schema_class, image_bytes, image_mime_type),
                 },
             ],
-            "temperature": 0.2,
         }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+
         if self.max_tokens:
             payload["max_tokens"] = self.max_tokens
 

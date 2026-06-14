@@ -91,6 +91,9 @@ Environment variables (recommended via a repo-root `.env`; see `.env.example`):
 - `OPENAI_API_KEY`: API key for first-party OpenAI when `LLM_PROVIDER=openai`.
 - `OPENAI_MODEL`: OpenAI model ID. The example default is `gpt-4o-mini`.
 - `OPENAI_RESPONSE_FORMAT`: OpenAI response format. Defaults to `json_schema`; `json_object` and `none` are also supported.
+- `OPENAI_TIMEOUT_SECONDS`: First-party OpenAI read timeout. Defaults to `300`.
+- `OPENAI_REASONING_EFFORT`: Optional reasoning effort for GPT-5/o-series models, for example `low`.
+- `OPENAI_TEMPERATURE`: Optional first-party OpenAI sampling temperature. Omitted by default so models that only support their default temperature can run.
 - `OPENAI_PROJECT_ID` / `OPENAI_ORG_ID`: Optional OpenAI project and organization routing headers.
 - `IMAGE_OUTPUT_ENABLED`: Optional global default for generated product images. The UI and API can opt in per job with `generate_image=true`.
 - `IMAGE_PROVIDER`: Image provider. Supports `openai`, `openai-compatible`, or `none`.
@@ -98,6 +101,9 @@ Environment variables (recommended via a repo-root `.env`; see `.env.example`):
 - `OPENAI_IMAGE_SIZE`: Generated image size, for example `1024x1024`.
 - `LLM_API_KEY`: Generic provider API key alias. For Gemini, `GEMINI_API_KEY` or `GOOGLE_API_KEY` still work.
 - `LLM_MODEL`: Model to use, for example `gemini-3.5-flash` or an OpenAI/OpenAI-compatible model ID.
+- `LLM_TIMEOUT_SECONDS`: Generic read timeout. OpenAI-compatible endpoints default to `90`.
+- `LLM_REASONING_EFFORT`: Optional generic reasoning effort for compatible endpoints that support it.
+- `LLM_TEMPERATURE`: Optional generic sampling temperature. OpenAI-compatible endpoints default to `0.2`; set `default`, `none`, or `omit` to omit it.
 - `STRICT_LLM`: Set to `true` (default) to fail fast when model validation is enabled and the model is unavailable. Set to `false` to attempt fallback.
 - `LLM_FALLBACK_MODEL`: Optional fallback model when `STRICT_LLM=false`.
 - `LLM_BASE_URL`: Optional base URL for OpenAI-compatible providers.
