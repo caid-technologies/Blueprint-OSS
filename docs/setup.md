@@ -1,11 +1,11 @@
 # Local Setup
 
-Blueprint OSS runs a FastAPI backend and a Next.js frontend. PostgreSQL is supported but optional; the backend will fall back to SQLite for local use.
+Blueprint OSS runs a FastAPI backend and a Next.js frontend. Supabase is supported for deployment through the Supabase client; the backend falls back to SQLite for local use.
 
 ## Prerequisites
 - **Python 3.11+**
 - **Node.js 18+**
-- **PostgreSQL** (optional, recommended for persistent storage)
+- **Supabase project** (optional, recommended for deployed persistent storage)
 - **Docker** (optional, for containerized frontend/backend images)
 
 ## Docker setup
@@ -20,12 +20,13 @@ This builds `blueprint-backend:local` and `blueprint-frontend:local`, starts the
 The Compose backend defaults to:
 
 ```env
-DATABASE_URL=sqlite:////data/blueprint.db
+SQLITE_DATABASE_URL=sqlite:////data/blueprint.db
+JOB_METADATA_BACKEND=auto
 JOB_METADATA_DB_PATH=/data/blueprint_jobs.db
 LLM_PROVIDER=simulation
 ```
 
-Set the same live-provider variables listed below in your shell or repo-root `.env` before running Compose if you want model-backed generation. Use `DOCKER_DATABASE_URL` if you want to override the container database URL.
+Set the same database and live-provider variables listed below in your shell or repo-root `.env` before running Compose if you want Supabase or model-backed generation.
 
 If you publish the backend on a different host or port, rebuild the frontend with a matching browser-visible API URL:
 
@@ -46,7 +47,15 @@ pip install -r backend/requirements.txt
 Recommended: create a repo-root `.env` (see `.env.example`).
 
 ```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/blueprint
+# Supabase persistence through the Supabase Python client.
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+# Or, for newer Supabase projects:
+# SUPABASE_SECRET_KEY=your_secret_key_here
+
+# Local fallback / explicit SQLite
+# DATABASE_BACKEND=sqlite
+SQLITE_DATABASE_URL=sqlite:///./blueprint.db
 
 # Live LLM generation
 LLM_PROVIDER=openai
@@ -71,6 +80,17 @@ OPENAI_IMAGE_SIZE=1024x1024
 # OPENAI_IMAGE_QUALITY=medium
 # OPENAI_IMAGE_OUTPUT_FORMAT=png
 
+# Optional Supabase Storage upload for reference/product images.
+# Uses the Supabase client with SUPABASE_URL plus the service-role/secret key.
+SUPABASE_S3_ENDPOINT=https://knmuwxhfrgkykyvblzwi.storage.supabase.co/storage/v1/s3
+SUPABASE_S3_BUCKET=contents
+# SUPABASE_S3_REGION=us-east-1
+# Optional fallback for S3-compatible uploads when Supabase client env is absent.
+# SUPABASE_S3_ACCESS_KEY_ID=your_supabase_s3_access_key_id
+# SUPABASE_S3_SECRET_ACCESS_KEY=your_supabase_s3_secret_access_key
+# SUPABASE_IMAGE_SIGNED_URL_SECONDS=86400
+# SUPABASE_STORAGE_PUBLIC_BASE_URL=https://knmuwxhfrgkykyvblzwi.supabase.co
+
 # Generic provider aliases
 # LLM_API_KEY=your_provider_api_key_here
 # LLM_MODEL=gpt-4o-mini
@@ -85,6 +105,7 @@ OPENAI_IMAGE_SIZE=1024x1024
 # LLM_TEMPERATURE=0.2
 
 # Optional TCP JSONL A2A socket
+JOB_METADATA_BACKEND=auto
 JOB_METADATA_DB_PATH=./blueprint_jobs.db
 A2A_SOCKET_ENABLED=false
 A2A_SOCKET_HOST=127.0.0.1
@@ -92,7 +113,10 @@ A2A_SOCKET_PORT=8766
 ```
 
 Notes:
-- If `DATABASE_URL` is missing or the connection fails, the backend falls back to `sqlite:///./blueprint.db`.
+- Supabase mode uses `SUPABASE_URL` plus `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`; it does not use a Postgres connection string.
+- Do not use anon, publishable, or `NEXT_PUBLIC_` Supabase keys for the backend. They obey RLS and cannot seed these tables by default.
+- If Supabase client variables are missing, the backend falls back to `SQLITE_DATABASE_URL` or `sqlite:///./blueprint.db`.
+- `DATABASE_BACKEND` can be `supabase` or `sqlite`.
 - `LLM_PROVIDER` can be `gemini`, `openai`, `openai-compatible`, or `simulation`.
 - `OPENAI_API_KEY` enables first-party OpenAI live structured generation when `LLM_PROVIDER=openai`.
 - `OPENAI_RESPONSE_FORMAT` defaults to `json_schema` for OpenAI. You can set it to `json_object` for older JSON mode or `none` to omit `response_format`.
@@ -104,6 +128,8 @@ Notes:
 - `IMAGE_PROVIDER` can be `openai`, `openai-compatible`, or `none`.
 - `OPENAI_IMAGE_MODEL` selects the image model. The example default is `gpt-image-2`.
 - `OPENAI_IMAGE_SIZE`, `OPENAI_IMAGE_QUALITY`, and `OPENAI_IMAGE_OUTPUT_FORMAT` tune generated image output.
+- When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`/`SUPABASE_SECRET_KEY` are set, uploaded reference images and generated product images are stored in the Supabase Storage bucket from `SUPABASE_S3_BUCKET` (default `contents`) through the Supabase client. S3-compatible credentials are only a fallback.
+- `SUPABASE_IMAGE_SIGNED_URL_SECONDS` controls how long refreshed Supabase Storage read URLs live when projects are loaded. It defaults to `86400`.
 - `LLM_API_KEY` is a generic provider key alias. Gemini aliases (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) are still supported.
 - `LLM_TIMEOUT_SECONDS` controls the generic provider read timeout. OpenAI-compatible endpoints default to `90`.
 - `LLM_REASONING_EFFORT` passes reasoning effort to compatible endpoints that support it.
@@ -111,7 +137,8 @@ Notes:
 - With `STRICT_LLM=true`, generation fails fast when model availability validation is enabled and `LLM_MODEL` is unavailable.
 - With `STRICT_LLM=false`, the backend may fall back to `LLM_FALLBACK_MODEL`.
 - OpenAI-compatible endpoints can use `LLM_BASE_URL`; local endpoints that do not require auth can set `LLM_ALLOW_NO_API_KEY=true`.
-- A2A job metadata is persisted to SQLite at `JOB_METADATA_DB_PATH`.
+- `JOB_METADATA_BACKEND=auto` stores A2A job metadata in Supabase when the main app database is Supabase, otherwise in SQLite.
+- `JOB_METADATA_DB_PATH` controls the SQLite A2A job metadata file.
 - A2A REST, WebSocket, and MCP routes are always mounted. The TCP JSONL socket starts only when `A2A_SOCKET_ENABLED=true`.
 
 ### Seed the component database

@@ -4,6 +4,8 @@ Blueprint is AI-native full-stack hardware. It turns a prompt (and optionally an
 
 This repository is an **MVP and research prototype** focused on **low-voltage maker electronics** (3.3V–5V) and safe, educational projects.
 
+![Blueprint project workspace showing a generated 3D printer concept and validated parts list](docs/assets/blueprint-project-3d-printer.png)
+
 ## What you can do
 - Compile a hardware idea into typed **Hardware IR** (Pydantic)
 - Run **rule-based electrical validation** (shorts, voltage mismatch, unpowered ICs, pin conflicts, overcurrent risk)
@@ -12,7 +14,7 @@ This repository is an **MVP and research prototype** focused on **low-voltage ma
   - Generated **SVG** schematic
 - View a lightweight **3D mechanical layout** (Three.js / React Three Fiber)
 - Generate an optional **product concept image** with an image model
-- Persist generated projects to **Postgres** (default) with an automatic **SQLite fallback**
+- Persist generated projects to **Supabase** through the Supabase client when configured, with an automatic **SQLite fallback**
 - Let external agents integrate over **REST long-polling, WebSocket, optional TCP JSONL sockets, or MCP-style JSON-RPC tools**
 
 ## How it works
@@ -24,7 +26,7 @@ Blueprint follows a sequential processing pipeline:
 3. **Hardware IR Generation**: Agents produce typed Hardware IR (Pydantic models)
 4. **Validation & Repair**: Rule-based validation checks the design and repairs issues automatically
 5. **UI Outputs**: Generate interactive visualizations (product image, React Flow schematic, SVG diagrams, 3D mechanical layout) and save to database
-6. **Persistence**: Project data is stored in PostgreSQL or SQLite
+6. **Persistence**: Project data is stored in Supabase or SQLite
 
 ## MVP scope & safety boundaries
 Blueprint intentionally limits scope to low-voltage maker electronics:
@@ -101,7 +103,10 @@ LLM_PROVIDER=openai OPENAI_API_KEY=your_openai_api_key_here OPENAI_MODEL=gpt-4o-
 ```
 
 Environment variables (recommended via a repo-root `.env`; see `.env.example`):
-- `DATABASE_URL`: Database connection string (default: `******localhost:5432/blueprint`). Falls back to `sqlite:///./blueprint.db` if PostgreSQL is unavailable.
+- `SUPABASE_URL`: Supabase project API URL, for example `https://your-project-ref.supabase.co`.
+- `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY`: Backend-only Supabase key for writes. Do not use anon/publishable keys.
+- `DATABASE_BACKEND`: Optional override: `supabase` or `sqlite`.
+- `SQLITE_DATABASE_URL`: SQLite fallback URL (default: `sqlite:///./blueprint.db`).
 - `LLM_PROVIDER`: Live generation provider: `gemini`, `openai`, `openai-compatible`, or `simulation`.
 - `OPENAI_API_KEY`: API key for first-party OpenAI when `LLM_PROVIDER=openai`.
 - `OPENAI_MODEL`: OpenAI model ID. The example default is `gpt-4o-mini`.
@@ -114,6 +119,10 @@ Environment variables (recommended via a repo-root `.env`; see `.env.example`):
 - `IMAGE_PROVIDER`: Image provider. Supports `openai`, `openai-compatible`, or `none`.
 - `OPENAI_IMAGE_MODEL`: OpenAI image model ID. The example default is `gpt-image-2`.
 - `OPENAI_IMAGE_SIZE`: Generated image size, for example `1024x1024`.
+- `SUPABASE_S3_ENDPOINT`: Supabase Storage S3 endpoint associated with image uploads. Defaults from `SUPABASE_URL`; this project uses `https://knmuwxhfrgkykyvblzwi.storage.supabase.co/storage/v1/s3`.
+- `SUPABASE_S3_BUCKET`: Supabase Storage bucket for image uploads (default: `contents`).
+- `SUPABASE_S3_ACCESS_KEY_ID` / `SUPABASE_S3_SECRET_ACCESS_KEY`: Optional S3-compatible fallback credentials. The normal backend path uploads through the Supabase client with `SUPABASE_URL` plus the service-role/secret key.
+- `SUPABASE_IMAGE_SIGNED_URL_SECONDS`: Lifetime for refreshed Supabase Storage read URLs when projects are loaded (default: `86400`).
 - `LLM_API_KEY`: Generic provider API key alias. For Gemini, `GEMINI_API_KEY` or `GOOGLE_API_KEY` still work.
 - `LLM_MODEL`: Model to use, for example `gemini-3.5-flash` or an OpenAI/OpenAI-compatible model ID.
 - `LLM_TIMEOUT_SECONDS`: Generic read timeout. OpenAI-compatible endpoints default to `90`.
@@ -122,7 +131,8 @@ Environment variables (recommended via a repo-root `.env`; see `.env.example`):
 - `STRICT_LLM`: Set to `true` (default) to fail fast when model validation is enabled and the model is unavailable. Set to `false` to attempt fallback.
 - `LLM_FALLBACK_MODEL`: Optional fallback model when `STRICT_LLM=false`.
 - `LLM_BASE_URL`: Optional base URL for OpenAI-compatible providers.
-- `JOB_METADATA_DB_PATH`: SQLite file used for durable A2A job metadata (default: `./blueprint_jobs.db`).
+- `JOB_METADATA_BACKEND`: Durable A2A job metadata backend. `auto` uses Supabase when the main app DB is Supabase, otherwise SQLite.
+- `JOB_METADATA_DB_PATH`: SQLite file used when A2A job metadata is on SQLite (default: `./blueprint_jobs.db`).
 - `A2A_SOCKET_ENABLED`: Set to `true` to start the optional TCP JSONL A2A socket.
 - `A2A_SOCKET_HOST` / `A2A_SOCKET_PORT`: Host and port for the optional TCP JSONL listener.
 

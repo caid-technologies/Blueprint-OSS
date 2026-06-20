@@ -4,7 +4,7 @@ import os
 # Add parent directory to path so imports work when running this file directly
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.database import SessionLocal, DBComponentTemplate, init_db
+from backend.database import init_db, insert_component_template_if_missing
 from backend.models import PinDefinition, ComponentTemplate
 import json
 
@@ -279,35 +279,17 @@ SEED_COMPONENTS = [
 def seed_database():
     print("Initializing database...")
     init_db()
-    
-    db = SessionLocal()
+
     try:
         print("Seeding component templates...")
         count = 0
         for comp in SEED_COMPONENTS:
-            # Check if template already exists
-            existing = db.query(DBComponentTemplate).filter(DBComponentTemplate.part_number == comp["part_number"]).first()
-            if not existing:
-                db_template = DBComponentTemplate(
-                    part_number=comp["part_number"],
-                    name=comp["name"],
-                    category=comp["category"],
-                    description=comp["description"],
-                    price=comp["price"],
-                    sourcing_url=comp["sourcing_url"],
-                    pins=comp["pins"], # Pydantic model representation or direct list
-                    use_cases=comp["use_cases"]
-                )
-                db.add(db_template)
+            if insert_component_template_if_missing(comp):
                 count += 1
-        db.commit()
         print(f"Successfully seeded {count} new components in database.")
     except Exception as e:
-        db.rollback()
         print(f"Error seeding database: {e}")
         sys.exit(1)
-    finally:
-        db.close()
 
 if __name__ == "__main__":
     seed_database()

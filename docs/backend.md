@@ -8,6 +8,7 @@ The backend is a **FastAPI** service that orchestrates agents, validates netlist
 - `backend/a2a.py` – A2A broker, REST/WebSocket/TCP/MCP handlers
 - `backend/llm_providers.py` – provider-agnostic structured LLM adapters
 - `backend/image_providers.py` – optional generated product image adapters
+- `backend/storage.py` – Supabase Storage image uploads
 - `backend/validation.py` – rule-based electrical checks
 - `backend/models.py` – Pydantic IR schemas
 - `backend/database.py` – SQLAlchemy models + DB setup
@@ -20,7 +21,7 @@ The backend is a **FastAPI** service that orchestrates agents, validates netlist
 - `PUT /api/a2a/agents/{agent_id}` – register an agent listener
 - `POST /api/a2a/messages` – submit or broker an A2A message
 - `GET /api/a2a/agents/{agent_id}/events` – long-poll queued A2A events
-- `GET /api/a2a/jobs` – list persisted SQLite A2A job metadata
+- `GET /api/a2a/jobs` – list persisted A2A job metadata
 - `GET /api/a2a/jobs/{job_id}` – fetch one persisted A2A job metadata record
 - `WebSocket /api/a2a/socket/{agent_id}` – bidirectional A2A event stream
 - `POST /mcp` and `POST /api/a2a/mcp` – MCP-style JSON-RPC tool endpoint
@@ -29,13 +30,13 @@ The backend is a **FastAPI** service that orchestrates agents, validates netlist
 - `GET /api/projects` – list generated projects
 - `GET /api/projects/{project_id}` – fetch a stored project
 - `POST /api/seed` – re-seed the component database
-- `GET /debug/config` – inspect LLM provider and model resolution (no secrets)
+- `GET /debug/config` – inspect LLM, database, image-provider, and image-storage resolution (no secrets)
 
 ## Orchestration layer
 The orchestrator runs an **ADK-style 7-agent pipeline** (implemented in `backend/agents/orchestrator.py`). Live agent calls go through `backend/llm_providers.py`, which exposes a provider-agnostic structured JSON interface that maps directly to the Hardware IR. If no live provider is configured (or generation fails), the backend falls back to deterministic example projects for a reliable local demo.
 
 ## A2A layer
-The A2A layer exposes Blueprint to external agents as a tool server and lightweight broker. REST long-polling, WebSocket, and MCP-style JSON-RPC are always mounted. Job metadata is persisted to SQLite at `JOB_METADATA_DB_PATH` (default `./blueprint_jobs.db`). The TCP JSONL listener is opt-in with `A2A_SOCKET_ENABLED=true`.
+The A2A layer exposes Blueprint to external agents as a tool server and lightweight broker. REST long-polling, WebSocket, and MCP-style JSON-RPC are always mounted. Job metadata uses `JOB_METADATA_BACKEND=auto`, storing in Supabase when the main app database is Supabase and otherwise falling back to SQLite at `JOB_METADATA_DB_PATH` (default `./blueprint_jobs.db`). The TCP JSONL listener is opt-in with `A2A_SOCKET_ENABLED=true`.
 
 LLM configuration behavior:
 - `LLM_PROVIDER`: `gemini`, `openai`, `openai-compatible`, or `simulation`
@@ -51,6 +52,11 @@ LLM configuration behavior:
 - `IMAGE_PROVIDER`: `openai`, `openai-compatible`, or `none`
 - `OPENAI_IMAGE_MODEL`: first-party OpenAI image model, for example `gpt-image-2`
 - `OPENAI_IMAGE_SIZE`: image output size, for example `1024x1024`
+- `SUPABASE_S3_ENDPOINT`: Supabase Storage S3 endpoint associated with image uploads, defaulting from `SUPABASE_URL` when possible
+- `SUPABASE_S3_BUCKET`: Supabase Storage bucket for reference and generated product images, defaulting to `contents`
+- `SUPABASE_S3_ACCESS_KEY_ID` / `SUPABASE_S3_SECRET_ACCESS_KEY`: optional S3-compatible fallback credentials. The normal backend path writes through the Supabase client using `SUPABASE_URL` plus the service-role/secret key
+- `SUPABASE_IMAGE_SIGNED_URL_SECONDS`: lifetime for refreshed Supabase Storage read URLs when projects are loaded, defaulting to `86400`
+- `SUPABASE_STORAGE_PUBLIC_BASE_URL`: optional public object URL base; defaults from `SUPABASE_URL` or the S3 endpoint
 - `LLM_FALLBACK_MODEL`: optional fallback model
 - `LLM_TIMEOUT_SECONDS`: generic read timeout. OpenAI-compatible endpoints default to `90`
 - `LLM_REASONING_EFFORT`: optional generic reasoning effort for compatible endpoints that support it

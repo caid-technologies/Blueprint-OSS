@@ -1,13 +1,19 @@
 from typing import Any, Dict, List
 from uuid import uuid4
-from fastapi import Body, FastAPI, Depends, HTTPException, Query, WebSocket, status
+from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from backend.database import get_db, init_db, DBGeneratedProject, DBComponentTemplate
+from backend.database import (
+    count_component_templates,
+    get_database_config,
+    get_generated_project,
+    init_db,
+    list_component_templates,
+    list_generated_projects,
+)
 from backend.seed_db import seed_database
 from backend.models import (
     GenerateProjectRequest, HardwareIR, ValidationReport, 
@@ -28,6 +34,7 @@ from backend.a2a import (
 )
 from backend.image_providers import get_image_output_debug_config
 from backend.job_store import JOB_STORE
+from backend.storage import get_image_storage_config, hydrate_image_storage_metadata
 from backend.validation import validate_circuit
 from backend.utils import generate_mermaid_chart, generate_svg_schematic
 
@@ -52,9 +59,7 @@ async def startup_event():
     print("Starting up Blueprint server...")
     try:
         init_db()
-        # Seed component templates if empty
-        db = next(get_db())
-        count = db.query(DBComponentTemplate).count()
+        count = count_component_templates()
         if count == 0:
             print("Database empty. Seeding templates automatically...")
             seed_database()
@@ -62,6 +67,7 @@ async def startup_event():
             print(f"Database ready with {count} component templates.")
     except Exception as e:
         print(f"Error during database startup: {e}")
+        raise
     JOB_STORE.init_db()
     await start_a2a_tcp_server()
 
@@ -88,7 +94,10 @@ def debug_config_endpoint():
         orchestrator = HardwarePipelineOrchestrator()
         return {
             **orchestrator.get_debug_config(),
+            "database": get_database_config(),
+            "job_metadata": JOB_STORE.get_config(),
             "image_output": get_image_output_debug_config(),
+            "image_storage": get_image_storage_config(),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Debug config failed: {str(e)}")
@@ -122,8 +131,10 @@ def generate_project_endpoint(request: GenerateProjectRequest):
     try:
         response = build_generation_response(request.prompt, request.image_data, generate_image=request.generate_image)
         JOB_STORE.mark_succeeded(job_id, response)
+        project_id = (response.get("project_ir", {}).get("assembly_metadata") or {}).get("project_id")
         return {
             **response,
+            "project_id": project_id,
             "job_id": job_id,
             "job": JOB_STORE.get_job(job_id),
         }
@@ -173,13 +184,13 @@ def list_a2a_jobs(
     job_status: str | None = Query(None, alias="status"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    """Lists persisted SQLite job metadata."""
+    """Lists persisted A2A job metadata."""
     return JOB_STORE.list_jobs(sender=sender, status=job_status, limit=limit)
 
 
 @app.get("/api/a2a/jobs/{job_id}")
 def get_a2a_job(job_id: str):
-    """Fetches persisted SQLite metadata for one A2A job."""
+    """Fetches persisted metadata for one A2A job."""
     job = JOB_STORE.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="A2A job not found.")
@@ -204,10 +215,10 @@ async def a2a_mcp_endpoint(payload: Any = Body(...)):
     return await handle_mcp_json_rpc(payload)
 
 @app.get("/api/projects")
-def list_projects_endpoint(db: Session = Depends(get_db)):
+def list_projects_endpoint():
     """Lists all previously compiled hardware projects."""
     try:
-        projects = db.query(DBGeneratedProject).order_by(DBGeneratedProject.id.desc()).all()
+        projects = list_generated_projects()
         return [
             {
                 "project_id": p.project_id,
@@ -221,14 +232,15 @@ def list_projects_endpoint(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/projects/{project_id}")
-def get_project_endpoint(project_id: str, db: Session = Depends(get_db)):
+def get_project_endpoint(project_id: str):
     """Retrieves a specific hardware design and its corresponding schematics."""
-    project = db.query(DBGeneratedProject).filter(DBGeneratedProject.project_id == project_id).first()
+    project = get_generated_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
     
     try:
         ir = HardwareIR(**project.hardware_ir)
+        ir.assembly_metadata = hydrate_image_storage_metadata(ir.assembly_metadata, project.project_id)
         mermaid_code = generate_mermaid_chart(ir)
         svg_schematic = generate_svg_schematic(ir)
         
@@ -244,10 +256,10 @@ def get_project_endpoint(project_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error reading project IR: {str(e)}")
 
 @app.get("/api/components")
-def get_components_endpoint(db: Session = Depends(get_db)):
+def get_components_endpoint():
     """Returns the template library of seed electrical parts."""
     try:
-        components = db.query(DBComponentTemplate).all()
+        components = list_component_templates()
         return [
             {
                 "id": c.id,

@@ -5,7 +5,8 @@ FROM python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    DATABASE_URL=sqlite:////data/blueprint.db \
+    SQLITE_DATABASE_URL=sqlite:////data/blueprint.db \
+    JOB_METADATA_BACKEND=auto \
     JOB_METADATA_DB_PATH=/data/blueprint_jobs.db \
     A2A_SOCKET_HOST=0.0.0.0
 
