@@ -109,7 +109,7 @@ def cmd_jobs(args: argparse.Namespace) -> int:
     if args.local:
         from backend.job_store import JobMetadataStore
 
-        jobs = JobMetadataStore(args.db_path).list_jobs(
+        jobs = JobMetadataStore(args.db_path, backend="sqlite").list_jobs(
             sender=args.sender,
             status=args.status,
             limit=args.limit,

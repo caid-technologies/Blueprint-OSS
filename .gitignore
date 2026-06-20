@@ -23,6 +23,7 @@ __pycache__/
 .env.development.local
 .env.test.local
 .env.production.local
+supabase/.temp/
 
 # IDE & OS files
 .DS_Store

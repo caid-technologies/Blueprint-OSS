@@ -12,10 +12,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from backend.agents.orchestrator import HardwarePipelineOrchestrator
-from backend.database import DBGeneratedProject, SessionLocal
+from backend.database import update_generated_project_hardware_ir
 from backend.image_providers import build_image_provider, get_image_output_debug_config
 from backend.job_store import JOB_STORE
 from backend.models import ComponentInstance, ConnectionNet
+from backend.storage import get_image_storage_config, upload_image_to_supabase_s3
 from backend.utils import generate_mermaid_chart, generate_svg_schematic
 from backend.validation import validate_circuit
 
@@ -174,12 +175,9 @@ def get_a2a_capabilities() -> Dict[str, Any]:
                 ],
             },
         },
-        "job_metadata": {
-            "store": "sqlite",
-            "path_env": "JOB_METADATA_DB_PATH",
-            "default_path": "./blueprint_jobs.db",
-        },
+        "job_metadata": JOB_STORE.get_config(),
         "image_output": get_image_output_debug_config(),
+        "image_storage": get_image_storage_config(),
         "actions": [
             "blueprint.generate_project",
             "blueprint.debug_config",
@@ -206,6 +204,43 @@ def _decode_image_data(image_data: Optional[str]) -> Tuple[Optional[bytes], Opti
         base64_data = base64_data.strip()
 
     return base64.b64decode(base64_data), image_mime_type or "image/png"
+
+
+def _attach_stored_image_metadata(
+    ir: Any,
+    *,
+    image_data: str,
+    metadata_prefix: str,
+    object_prefix: str,
+    fallback_content_type: str = "image/png",
+    allow_remote_url: bool = False,
+) -> Dict[str, Any]:
+    metadata = ir.assembly_metadata or {}
+    project_id = metadata.get("project_id")
+    try:
+        stored = upload_image_to_supabase_s3(
+            image_data,
+            prefix=object_prefix,
+            project_id=project_id,
+            fallback_content_type=fallback_content_type,
+            allow_remote_url=allow_remote_url,
+        )
+    except Exception as exc:
+        logger.warning("Image upload to Supabase Storage failed for %s: %s", metadata_prefix, exc)
+        return {
+            f"{metadata_prefix}_storage_error": str(exc)[:500],
+            f"{metadata_prefix}_storage_bucket": get_image_storage_config().get("bucket"),
+        }
+
+    if not stored:
+        return {
+            f"{metadata_prefix}_storage_enabled": False,
+            f"{metadata_prefix}_storage_bucket": get_image_storage_config().get("bucket"),
+        }
+    return {
+        **stored.metadata(metadata_prefix),
+        f"{metadata_prefix}_storage_enabled": True,
+    }
 
 
 def _attach_product_image(prompt_text: str, ir: Any, generate_image: bool = False) -> None:
@@ -237,14 +272,28 @@ def _attach_product_image(prompt_text: str, ir: Any, generate_image: bool = Fals
     if not generated_image:
         return
 
-    ir.assembly_metadata = {
-        **(ir.assembly_metadata or {}),
-        "product_image_data": generated_image.data_url,
+    storage_metadata = _attach_stored_image_metadata(
+        ir,
+        image_data=generated_image.data_url,
+        metadata_prefix="product_image",
+        object_prefix="product",
+        fallback_content_type=f"image/{generated_image.output_format or 'png'}",
+        allow_remote_url=True,
+    )
+    product_metadata: Dict[str, Any] = {
         "product_image_provider": generated_image.provider,
         "product_image_model": generated_image.model,
         "product_image_size": generated_image.size,
         "product_image_output_format": generated_image.output_format,
         "product_image_prompt": generated_image.prompt,
+        **storage_metadata,
+    }
+    if not storage_metadata.get("product_image_url"):
+        product_metadata["product_image_data"] = generated_image.data_url
+
+    ir.assembly_metadata = {
+        **(ir.assembly_metadata or {}),
+        **product_metadata,
     }
 
 
@@ -254,18 +303,10 @@ def _persist_updated_project_ir(ir: Any) -> None:
     if not project_id:
         return
 
-    db = SessionLocal()
     try:
-        project = db.query(DBGeneratedProject).filter(DBGeneratedProject.project_id == project_id).first()
-        if not project:
-            return
-        project.hardware_ir = ir.model_dump()
-        db.commit()
+        update_generated_project_hardware_ir(project_id, ir.model_dump())
     except Exception as exc:
-        db.rollback()
         logger.warning("Failed to persist updated project metadata for %s: %s", project_id, exc)
-    finally:
-        db.close()
 
 
 def build_generation_response(
@@ -292,11 +333,23 @@ def build_generation_response(
 
     if image_data:
         metadata = ir.assembly_metadata or {}
-        ir.assembly_metadata = {
-            **metadata,
-            "reference_image_data": image_data,
+        storage_metadata = _attach_stored_image_metadata(
+            ir,
+            image_data=image_data,
+            metadata_prefix="reference_image",
+            object_prefix="reference",
+            fallback_content_type=image_mime_type or "image/png",
+        )
+        reference_metadata: Dict[str, Any] = {
+            **storage_metadata,
             "image_features": metadata.get("image_features") or ir.constraints[:12],
             "input_mode": "prompt_image",
+        }
+        if not storage_metadata.get("reference_image_url"):
+            reference_metadata["reference_image_data"] = image_data
+        ir.assembly_metadata = {
+            **metadata,
+            **reference_metadata,
         }
 
     _attach_product_image(prompt_text, ir, generate_image=generate_image)
@@ -325,6 +378,7 @@ async def call_blueprint_action(action: str, payload: Dict[str, Any]) -> Dict[st
         return {
             **orchestrator.get_debug_config(),
             "image_output": get_image_output_debug_config(),
+            "image_storage": get_image_storage_config(),
         }
 
     if normalized == "validate_circuit":
@@ -603,7 +657,7 @@ def _mcp_tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "blueprint.a2a.get_job",
-            "description": "Fetch persisted SQLite metadata for one A2A job.",
+            "description": "Fetch persisted metadata for one A2A job.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"job_id": {"type": "string"}},
@@ -612,7 +666,7 @@ def _mcp_tools() -> List[Dict[str, Any]]:
         },
         {
             "name": "blueprint.a2a.list_jobs",
-            "description": "List persisted SQLite A2A job metadata.",
+            "description": "List persisted A2A job metadata.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

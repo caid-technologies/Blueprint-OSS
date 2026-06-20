@@ -51,7 +51,7 @@ flowchart TD
 - **Frontend (Next.js + React Flow):** Visualizes the structured project, nets, BOM, and instructions.
 - **Backend (FastAPI):** Hosts the orchestration layer, validation, and storage APIs.
 - **A2A broker:** Lets external agents register, send messages, listen for queued events, or call Blueprint tools through MCP-style JSON-RPC.
-- **Database (Postgres/SQLite):** Stores component templates and generated projects.
+- **Database (Supabase client/SQLite):** Stores component templates and generated projects.
 - **Utilities:** Render Mermaid and SVG schematics from the IR.
 
 ## Output artifacts

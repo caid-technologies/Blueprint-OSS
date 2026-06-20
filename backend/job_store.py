@@ -21,6 +21,15 @@ def _job_db_path() -> str:
     return os.getenv("JOB_METADATA_DB_PATH", DEFAULT_JOB_DB_PATH)
 
 
+def _job_metadata_backend() -> str:
+    value = os.getenv("JOB_METADATA_BACKEND", "auto").strip().lower()
+    if value in {"auto", "supabase", "database", "db"}:
+        return "supabase" if value != "auto" else "auto"
+    if value in {"sqlite", "sqlite3"}:
+        return "sqlite"
+    return "auto"
+
+
 def _json_default(value: Any) -> str:
     return str(value)
 
@@ -32,6 +41,8 @@ def _json_dumps(value: Any) -> str:
 def _json_loads(value: Optional[str]) -> Any:
     if value is None:
         return None
+    if not isinstance(value, str):
+        return value
     try:
         return json.loads(value)
     except json.JSONDecodeError:
@@ -78,16 +89,54 @@ def summarize_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any
 
 
 class JobMetadataStore:
-    """Small SQLite store for durable A2A job metadata."""
+    """Durable A2A job metadata store using Supabase client or SQLite."""
 
-    def __init__(self, db_path: Optional[str] = None) -> None:
+    def __init__(self, db_path: Optional[str] = None, backend: Optional[str] = None) -> None:
         self.db_path = db_path or _job_db_path()
+        requested_backend = (backend or _job_metadata_backend()).strip().lower()
+        if db_path is not None:
+            requested_backend = "sqlite"
+        self.requested_backend = requested_backend if requested_backend in {"auto", "supabase", "sqlite"} else "auto"
+        self.backend = "unconfigured"
+        self._client = None
         self._lock = threading.Lock()
         self._initialized = False
+
+    def _ensure_backend_configured(self) -> None:
+        if self.backend != "unconfigured":
+            return
+
+        if self.requested_backend == "sqlite":
+            self.backend = "sqlite"
+            return
+
+        from backend.database import DATABASE_BACKEND, get_supabase_client
+
+        if DATABASE_BACKEND == "supabase":
+            self.backend = "supabase"
+            self._client = get_supabase_client()
+            return
+
+        if self.requested_backend == "supabase":
+            raise RuntimeError("JOB_METADATA_BACKEND=supabase requires the main database backend to be Supabase.")
+
+        self.backend = "sqlite"
+
+    def get_config(self) -> Dict[str, Any]:
+        self._ensure_backend_configured()
+        if self.backend == "supabase":
+            return {"backend": "supabase", "client": "supabase-py", "table": "a2a_jobs"}
+        return {"backend": "sqlite", "path_env": "JOB_METADATA_DB_PATH", "path": self.db_path}
 
     def init_db(self) -> None:
         if self._initialized:
             return
+        self._ensure_backend_configured()
+        if self.backend == "supabase":
+            self._client.table("a2a_jobs").select("job_id").limit(1).execute()
+            self._initialized = True
+            return
+
         directory = os.path.dirname(os.path.abspath(self.db_path))
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -135,6 +184,29 @@ class JobMetadataStore:
     ) -> Dict[str, Any]:
         self.init_db()
         now = _utc_now()
+        if self.backend == "supabase":
+            self._client.table("a2a_jobs").upsert(
+                {
+                    "job_id": job_id,
+                    "message_id": message_id,
+                    "correlation_id": correlation_id,
+                    "action": action,
+                    "sender": sender,
+                    "recipient": recipient,
+                    "status": status,
+                    "server_owned": server_owned,
+                    "created_at": now,
+                    "updated_at": now,
+                    "started_at": None,
+                    "completed_at": None,
+                    "payload_json": _redact_payload(payload),
+                    "result_summary_json": None,
+                    "error": None,
+                },
+                on_conflict="job_id",
+            ).execute()
+            return self.get_job(job_id) or {}
+
         with self._locked_connection() as conn:
             conn.execute(
                 """
@@ -163,6 +235,17 @@ class JobMetadataStore:
     def mark_running(self, job_id: str) -> None:
         self.init_db()
         now = _utc_now()
+        if self.backend == "supabase":
+            current = self.get_job(job_id) or {}
+            self._client.table("a2a_jobs").update(
+                {
+                    "status": "running",
+                    "started_at": current.get("started_at") or now,
+                    "updated_at": now,
+                }
+            ).eq("job_id", job_id).execute()
+            return
+
         with self._locked_connection() as conn:
             conn.execute(
                 """
@@ -179,6 +262,19 @@ class JobMetadataStore:
     def mark_succeeded(self, job_id: str, result: Optional[Dict[str, Any]]) -> None:
         self.init_db()
         now = _utc_now()
+        result_summary = summarize_result(result)
+        if self.backend == "supabase":
+            self._client.table("a2a_jobs").update(
+                {
+                    "status": "succeeded",
+                    "completed_at": now,
+                    "updated_at": now,
+                    "result_summary_json": result_summary,
+                    "error": None,
+                }
+            ).eq("job_id", job_id).execute()
+            return
+
         with self._locked_connection() as conn:
             conn.execute(
                 """
@@ -186,12 +282,23 @@ class JobMetadataStore:
                 SET status = ?, completed_at = ?, updated_at = ?, result_summary_json = ?, error = NULL
                 WHERE job_id = ?
                 """,
-                ("succeeded", now, now, _json_dumps(summarize_result(result)), job_id),
+                ("succeeded", now, now, _json_dumps(result_summary), job_id),
             )
 
     def mark_failed(self, job_id: str, error: str) -> None:
         self.init_db()
         now = _utc_now()
+        if self.backend == "supabase":
+            self._client.table("a2a_jobs").update(
+                {
+                    "status": "failed",
+                    "completed_at": now,
+                    "updated_at": now,
+                    "error": error,
+                }
+            ).eq("job_id", job_id).execute()
+            return
+
         with self._locked_connection() as conn:
             conn.execute(
                 """
@@ -204,6 +311,10 @@ class JobMetadataStore:
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         self.init_db()
+        if self.backend == "supabase":
+            rows = self._client.table("a2a_jobs").select("*").eq("job_id", job_id).limit(1).execute().data or []
+            return self._row_to_dict(rows[0]) if rows else None
+
         with closing(self._connect()) as conn:
             row = conn.execute("SELECT * FROM a2a_jobs WHERE job_id = ?", (job_id,)).fetchone()
         return self._row_to_dict(row) if row else None
@@ -216,6 +327,16 @@ class JobMetadataStore:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         self.init_db()
+        limit = max(1, min(limit, 200))
+        if self.backend == "supabase":
+            query = self._client.table("a2a_jobs").select("*")
+            if sender:
+                query = query.eq("sender", sender)
+            if status:
+                query = query.eq("status", status)
+            rows = query.order("created_at", desc=True).limit(limit).execute().data or []
+            return [self._row_to_dict(row) for row in rows]
+
         clauses = []
         params: List[Any] = []
         if sender:
@@ -226,7 +347,7 @@ class JobMetadataStore:
             params.append(status)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        params.append(max(1, min(limit, 200)))
+        params.append(limit)
 
         with closing(self._connect()) as conn:
             rows = conn.execute(
@@ -238,6 +359,10 @@ class JobMetadataStore:
     def _update_status(self, job_id: str, status: str) -> None:
         self.init_db()
         now = _utc_now()
+        if self.backend == "supabase":
+            self._client.table("a2a_jobs").update({"status": status, "updated_at": now}).eq("job_id", job_id).execute()
+            return
+
         with self._locked_connection() as conn:
             conn.execute(
                 "UPDATE a2a_jobs SET status = ?, updated_at = ? WHERE job_id = ?",
@@ -253,7 +378,7 @@ class JobMetadataStore:
         return _LockedConnection(self._lock, self._connect())
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    def _row_to_dict(row: Any) -> Dict[str, Any]:
         result = dict(row)
         result["server_owned"] = bool(result["server_owned"])
         result["payload"] = _json_loads(result.pop("payload_json", None)) or {}

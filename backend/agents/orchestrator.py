@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
@@ -7,7 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from backend.database import SessionLocal, DBComponentTemplate, DBGeneratedProject
+from backend.database import (
+    get_component_template_by_part_number,
+    list_component_templates,
+    save_generated_project,
+)
 from backend.llm_providers import LLMProviderConfigError, LLMProviderValidation, build_llm_provider
 from backend.models import (
     HardwareIR, ProjectOverview, FunctionalRequirements, 
@@ -20,26 +25,31 @@ from backend.validation import validate_circuit, check_safety_violations, build_
 
 logger = logging.getLogger(__name__)
 
+
+def canonical_project_uuid(value: Optional[str] = None) -> str:
+    """Return a canonical UUID string, ignoring legacy/non-UUID project ids."""
+    if value:
+        try:
+            return str(uuid.UUID(str(value).strip()))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return str(uuid.uuid4())
+
 # Tool to query database templates
 def get_db_component_templates() -> List[Dict[str, Any]]:
     """Helper tool that returns all available hardware templates in the seed database."""
-    db = SessionLocal()
-    try:
-        db_templates = db.query(DBComponentTemplate).all()
-        templates = []
-        for t in db_templates:
-            templates.append({
-                "part_number": t.part_number,
-                "name": t.name,
-                "category": t.category,
-                "description": t.description,
-                "price": t.price,
-                "pins": t.pins,
-                "use_cases": t.use_cases
-            })
-        return templates
-    finally:
-        db.close()
+    templates = []
+    for t in list_component_templates():
+        templates.append({
+            "part_number": t.part_number,
+            "name": t.name,
+            "category": t.category,
+            "description": t.description,
+            "price": t.price,
+            "pins": t.pins,
+            "use_cases": t.use_cases
+        })
+    return templates
 
 # Helper utilities to enrich HardwareIR schemas dynamically
 def extract_power_rails(components: List[ComponentInstance], nets: List[ConnectionNet]) -> List[PowerRail]:
@@ -695,33 +705,25 @@ class HardwarePipelineOrchestrator:
             return self._generate_simulated_project(user_prompt, has_image=bool(image_bytes))
 
     def save_project_to_db(self, prompt: str, ir: HardwareIR) -> str:
-        """Saves a successfully generated HardwareIR to the PostgreSQL/SQLite database."""
-        db = SessionLocal()
+        """Saves a successfully generated HardwareIR to the configured database."""
+        project_id = canonical_project_uuid((ir.assembly_metadata or {}).get("project_id"))
+        ir.assembly_metadata = {
+            **(ir.assembly_metadata or {}),
+            "project_id": project_id,
+        }
         try:
-            import uuid
-            project_id = f"proj_{uuid.uuid4().hex[:8]}"
-            ir.assembly_metadata = {
-                **(ir.assembly_metadata or {}),
-                "project_id": project_id,
-            }
-            
-            db_project = DBGeneratedProject(
+            save_generated_project(
                 project_id=project_id,
                 title=ir.overview.title,
                 prompt=prompt,
                 hardware_ir=ir.model_dump(),
                 created_at=datetime.utcnow().isoformat()
             )
-            db.add(db_project)
-            db.commit()
             logger.info(f"Project saved to database with ID: {project_id}")
             return project_id
         except Exception as e:
-            db.rollback()
             logger.error(f"Failed to save project to database: {e}")
             return ""
-        finally:
-            db.close()
 
     def _generate_simulated_project(self, prompt: str, has_image: bool = False) -> HardwareIR:
         """High-fidelity, deterministic simulated generator used as fallback when live LLM generation is unavailable."""
@@ -1810,9 +1812,8 @@ class HardwarePipelineOrchestrator:
 
     def _get_pins_for_part(self, part_number: str) -> List[PinDefinition]:
         """Fetch pin template mapping from components database directly."""
-        db = SessionLocal()
         try:
-            db_template = db.query(DBComponentTemplate).filter(DBComponentTemplate.part_number == part_number).first()
+            db_template = get_component_template_by_part_number(part_number)
             if db_template:
                 return [PinDefinition(**pin) for pin in db_template.pins]
             return []
@@ -1822,8 +1823,6 @@ class HardwarePipelineOrchestrator:
                 if comp["part_number"] == part_number:
                     return [PinDefinition(**pin) for pin in comp["pins"]]
             return []
-        finally:
-            db.close()
 
     def _get_relay_pins_3v3_input(self) -> List[PinDefinition]:
         pins = []
