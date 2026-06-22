@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactFlow, {
   Background,
@@ -32,6 +32,7 @@ import {
   Download,
   Database,
   ArrowRight,
+  ArrowLeft,
   Battery,
   Monitor,
   Printer,
@@ -77,6 +78,13 @@ const communityProjects = [
     file: "smart_thermostat.json",
   },
 ];
+
+type ProjectGalleryItem = {
+  key: string;
+  title: string;
+  projectId: string;
+  image: ProjectImageCandidate | null;
+};
 
 const pipelineMermaidCode = `graph LR
   IMAGE["Image Input"] --> FEATURES["Feature Extraction"]
@@ -334,6 +342,7 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
   const [jobStatusFilter, setJobStatusFilter] = useState("all");
   const [jobsLastUpdatedAt, setJobsLastUpdatedAt] = useState<string | null>(null);
   const [showHeaderRecent, setShowHeaderRecent] = useState(false);
+  const [projectGalleryImages, setProjectGalleryImages] = useState<Record<string, ProjectImageCandidate | null>>({});
   const [catalogComponents, setCatalogComponents] = useState<any[]>([]);
   const [serverStatus, setServerStatus] = useState<"connected" | "disconnected">("disconnected");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -349,8 +358,18 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
 
   const fileInputRefSidebar = useRef<HTMLInputElement>(null);
   const fileInputRefCenter = useRef<HTMLInputElement>(null);
+  const projectsSectionRef = useRef<HTMLElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  const projectGalleryItems = useMemo(
+    () => buildProjectGalleryItems(projectHistory, projectGalleryImages),
+    [projectHistory, projectGalleryImages]
+  );
+
+  const scrollToProjects = () => {
+    projectsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const goHome = () => {
     setProjectIR(null);
@@ -443,6 +462,46 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
       document.removeEventListener("visibilitychange", pollJobs);
     };
   }, [fetchA2aJobs, jobStatusFilter]);
+
+  useEffect(() => {
+    const missingProjects = projectHistory.filter((project: any) => {
+      const projectId = project?.project_id ? String(project.project_id) : "";
+      return projectId && projectGalleryImages[projectId] === undefined;
+    });
+    if (!missingProjects.length) return;
+
+    let cancelled = false;
+
+    Promise.all(
+      missingProjects.map(async (project: any): Promise<[string, ProjectImageCandidate | null]> => {
+        const projectId = String(project.project_id);
+        try {
+          const res = await fetch(`${API_URL}/projects/${encodeURIComponent(projectId)}`);
+          if (!res.ok) return [projectId, null];
+
+          const data = await res.json();
+          const ir = withProjectResponseMetadata(data.project_ir, data);
+          return [projectId, resolveProjectImageCandidates(ir?.assembly_metadata || {})[0] || null];
+        } catch (error) {
+          console.error("Error fetching project image", error);
+          return [projectId, null];
+        }
+      })
+    ).then((entries) => {
+      if (cancelled) return;
+      setProjectGalleryImages((current) => {
+        const next = { ...current };
+        entries.forEach(([projectId, image]) => {
+          next[projectId] = image;
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectHistory, projectGalleryImages]);
 
   const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1039,29 +1098,29 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
             </div>
           </section>
 
-          <section className="mt-12 grid gap-4 lg:grid-cols-[1.35fr_0.85fr]">
-            <div className="border border-[#2c2f37] bg-[#17181d] p-5">
-              <div className="mb-4 flex items-center justify-between">
+          <section className="mt-8 grid gap-3 lg:grid-cols-[1.35fr_0.85fr]">
+            <div className="border border-[#2c2f37] bg-[#17181d] p-4">
+              <div className="mb-3 flex items-center justify-between">
                 <div>
                   <h2 className="text-base font-semibold text-white">Examples</h2>
                   <p className="mt-1 text-xs text-slate-500">Open a finished hardware plan.</p>
                 </div>
                 <span className="text-xs text-slate-500">More</span>
               </div>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-2 md:grid-cols-3">
                 {communityProjects.map((project) => (
                   <button
                     key={project.file}
                     type="button"
                     onClick={() => loadExample(project.file)}
-                    className="group border border-[#2c2f37] bg-[#141519] p-4 text-left hover:border-slate-500"
+                    className="group border border-[#2c2f37] bg-[#141519] p-3 text-left hover:border-slate-500"
                   >
-                    <div className="mb-4 flex h-10 w-10 items-center justify-center bg-black text-white">
+                    <div className="mb-3 flex h-8 w-8 items-center justify-center bg-black text-white">
                       <Sparkles className="h-4 w-4" />
                     </div>
                     <h3 className="text-sm font-semibold text-white">{project.title}</h3>
-                    <p className="mt-2 text-xs leading-6 text-slate-500">{project.description}</p>
-                    <span className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-white">
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{project.description}</p>
+                    <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-white">
                       Open project
                       <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
                     </span>
@@ -1082,8 +1141,15 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
               lastUpdatedAt={jobsLastUpdatedAt}
               pollIntervalMs={JOB_POLL_INTERVAL_MS}
               compact
+              onViewAllProjects={scrollToProjects}
             />
           </section>
+
+          <ProjectGallery
+            sectionRef={projectsSectionRef}
+            items={projectGalleryItems}
+            onOpenProjectPage={(projectId) => router.push(projectRoute(projectId))}
+          />
         </main>
       </div>
     );
@@ -1093,19 +1159,17 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
     <div className="h-screen overflow-hidden bg-[#141519] text-slate-200">
       <div className="grid h-full min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_280px]">
         <main className="flex min-h-0 min-w-0 flex-col">
-          <header className="relative flex min-h-[78px] items-center justify-center border-b border-[#282a30] bg-[#17181d] px-4">
+          <header className="flex min-h-[78px] items-center gap-3 border-b border-[#282a30] bg-[#17181d] px-4">
             <button
               type="button"
               onClick={goHome}
-              aria-label="Back to overview"
-              className="absolute left-4 hidden items-center gap-3 text-left md:flex"
+              className="inline-flex h-11 shrink-0 items-center gap-2 border border-[#2a2c33] px-3 text-xs font-black uppercase tracking-widest text-slate-400 hover:bg-white hover:text-black"
             >
-              <span className="flex h-9 w-9 items-center justify-center border border-[#30323a] bg-black text-white">
-                <Cpu className="h-4 w-4" />
-              </span>
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Home</span>
             </button>
 
-            <nav className="flex overflow-x-auto border border-[#2a2c33]">
+            <nav className="flex min-w-0 overflow-x-auto border border-[#2a2c33]">
               {workspaceTabs.map((tab) => {
                 const Icon = tab.icon;
                 return (
@@ -1217,6 +1281,99 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
 }
 
 export default BlueprintWorkspace;
+
+function buildProjectGalleryItems(
+  projectHistory: any[],
+  projectImages: Record<string, ProjectImageCandidate | null>
+): ProjectGalleryItem[] {
+  return projectHistory
+    .filter((project: any) => project?.project_id)
+    .map((project: any) => {
+      const projectId = String(project.project_id);
+      return {
+        key: projectId,
+        title: project.title || "Untitled project",
+        projectId,
+        image: projectImages[projectId] || null,
+      };
+    });
+}
+
+function ProjectGallery({
+  sectionRef,
+  items,
+  onOpenProjectPage,
+}: {
+  sectionRef: React.RefObject<HTMLElement>;
+  items: ProjectGalleryItem[];
+  onOpenProjectPage: (projectId: string) => void;
+}) {
+  return (
+    <section ref={sectionRef} id="all-projects" className="mt-16 border-t border-[#292b31] pt-12">
+      <div className="mb-6 flex flex-col gap-3">
+        <div>
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center border border-[#2c2f37] bg-black text-white">
+              <Cpu className="h-4 w-4" />
+            </span>
+            <h2 className="text-2xl font-black uppercase tracking-[0.22em] text-white">Projects</h2>
+          </div>
+          <p className="mt-4 text-sm leading-6 text-slate-500">{items.length} saved projects.</p>
+        </div>
+      </div>
+
+      {items.length ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {items.map((item) => (
+            <ProjectGalleryCard
+              key={item.key}
+              item={item}
+              onOpenProjectPage={() => onOpenProjectPage(item.projectId)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="border border-[#2c2f37] bg-[#17181d] p-8 text-sm leading-6 text-slate-500">
+          No saved projects yet.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProjectGalleryCard({
+  item,
+  onOpenProjectPage,
+}: {
+  item: ProjectGalleryItem;
+  onOpenProjectPage: () => void;
+}) {
+  return (
+    <article className="group border border-[#2c2f37] bg-[#17181d]">
+      <div className="aspect-[4/3] overflow-hidden bg-[#0f1014]">
+        {item.image ? (
+          <img src={item.image.src} alt={item.image.label} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full items-center justify-center border-b border-[#2c2f37] text-xs font-black uppercase tracking-[0.18em] text-slate-600">
+            No image
+          </div>
+        )}
+      </div>
+
+      <div className="p-4">
+        <h3 className="truncate text-sm font-black uppercase tracking-[0.08em] text-white">{item.title}</h3>
+        <button
+          type="button"
+          onClick={onOpenProjectPage}
+          className="mt-4 inline-flex h-10 items-center justify-center gap-2 border border-[#2a2c33] px-4 text-xs font-black uppercase text-white hover:bg-white hover:text-black"
+        >
+          Project page
+          <ArrowRight className="h-4 w-4" />
+        </button>
+      </div>
+    </article>
+  );
+}
 
 function SchematicLegend() {
   const nodeRows = [
@@ -1595,6 +1752,7 @@ function JobsPanel({
   title = "Jobs",
   description,
   emptyMessage = "No jobs recorded for this filter.",
+  onViewAllProjects,
 }: {
   jobs: A2AJob[];
   loading: boolean;
@@ -1610,23 +1768,26 @@ function JobsPanel({
   title?: string;
   description?: string;
   emptyMessage?: string;
+  onViewAllProjects?: () => void;
 }) {
-  const visibleJobs = compact ? jobs.slice(0, 5) : jobs;
+  const visibleJobs = compact ? jobs.slice(0, 2) : jobs;
   const filters = ["all", "queued", "running", "succeeded", "failed"];
   const panelDescription = description || `A2A job metadata from SQLite. Polling every ${Math.round(pollIntervalMs / 1000)}s.`;
 
   return (
-    <div className={`${compact ? "border border-[#2c2f37] bg-[#17181d] p-5" : "h-full overflow-y-auto bg-[#141519] p-6"}`}>
-      <div className="mb-5 flex items-start justify-between gap-4 border-b border-[#2a2c33] pb-4">
+    <div className={`${compact ? "border border-[#2c2f37] bg-[#17181d] p-4" : "h-full overflow-y-auto bg-[#141519] p-6"}`}>
+      <div className={`${compact ? "mb-3 pb-3" : "mb-5 pb-4"} flex items-start justify-between gap-4 border-b border-[#2a2c33]`}>
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-cyan-400" />
             <h2 className="text-base font-black uppercase text-white">{title}</h2>
           </div>
-          <p className="mt-2 text-xs leading-5 text-slate-500">
-            {panelDescription}
-          </p>
-          {lastUpdatedAt && (
+          {!compact && (
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              {panelDescription}
+            </p>
+          )}
+          {lastUpdatedAt && !compact && (
             <p className="mt-1 text-[11px] leading-5 text-slate-600">Updated {formatJobTime(lastUpdatedAt)}</p>
           )}
         </div>
@@ -1641,22 +1802,24 @@ function JobsPanel({
         </button>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {filters.map((filter) => (
-          <button
-            key={filter}
-            type="button"
-            onClick={() => onStatusFilterChange(filter)}
-            className={`border px-3 py-2 text-xs font-bold uppercase ${
-              statusFilter === filter
-                ? "border-white bg-white text-black"
-                : "border-[#2a2c33] bg-[#141519] text-slate-500 hover:border-slate-500 hover:text-white"
-            }`}
-          >
-            {filter}
-          </button>
-        ))}
-      </div>
+      {!compact && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {filters.map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              onClick={() => onStatusFilterChange(filter)}
+              className={`border px-3 py-2 text-xs font-bold uppercase ${
+                statusFilter === filter
+                  ? "border-white bg-white text-black"
+                  : "border-[#2a2c33] bg-[#141519] text-slate-500 hover:border-slate-500 hover:text-white"
+              }`}
+            >
+              {filter}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 flex gap-2 border border-amber-500/30 bg-amber-950/25 p-3 text-xs leading-5 text-amber-300">
@@ -1688,11 +1851,12 @@ function JobsPanel({
       {compact && jobs.length > visibleJobs.length && (
         <button
           type="button"
-          onClick={() => onStatusFilterChange(statusFilter)}
-          className="mt-4 flex w-full items-center justify-center gap-2 border border-[#2a2c33] px-4 py-3 text-xs font-black uppercase text-white hover:bg-white hover:text-black"
+          onClick={onViewAllProjects || (() => onStatusFilterChange(statusFilter))}
+          className="group mt-4 flex w-full items-center justify-center gap-2 border border-[#2a2c33] px-4 py-3 text-xs font-black uppercase text-white hover:bg-white hover:text-black"
         >
           <Database className="h-4 w-4" />
-          {jobs.length} total jobs
+          <span>{jobs.length} total jobs</span>
+          {onViewAllProjects && <span className="text-slate-500 group-hover:text-black">View projects</span>}
         </button>
       )}
     </div>
@@ -1717,7 +1881,7 @@ function JobRow({
   const isOpenable = Boolean(project?.project_id);
 
   return (
-    <article className="border border-[#2a2c33] bg-[#141519] p-4">
+    <article className={`border border-[#2a2c33] bg-[#141519] ${compact ? "p-3" : "p-4"}`}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1742,14 +1906,16 @@ function JobRow({
         </button>
       </div>
 
-      <div className={`mt-4 grid gap-2 text-[11px] ${compact ? "grid-cols-2" : "sm:grid-cols-6"}`}>
-        <JobMetric label="Job" value={job.job_id} />
-        <JobMetric label="Created" value={formatJobTime(job.created_at)} />
-        <JobMetric label="Duration" value={formatJobDuration(job)} />
-        <JobMetric label="Parts" value={summary.component_count ?? "-"} />
-        <JobMetric label="Valid" value={summary.is_valid === undefined ? "-" : summary.is_valid ? "yes" : "no"} />
-        <JobMetric label="Image" value={summary.has_product_image ? summary.product_image_model || "yes" : "-"} />
-      </div>
+      {!compact && (
+        <div className="mt-4 grid gap-2 text-[11px] sm:grid-cols-6">
+          <JobMetric label="Job" value={job.job_id} />
+          <JobMetric label="Created" value={formatJobTime(job.created_at)} />
+          <JobMetric label="Duration" value={formatJobDuration(job)} />
+          <JobMetric label="Parts" value={summary.component_count ?? "-"} />
+          <JobMetric label="Valid" value={summary.is_valid === undefined ? "-" : summary.is_valid ? "yes" : "no"} />
+          <JobMetric label="Image" value={summary.has_product_image ? summary.product_image_model || "yes" : "-"} />
+        </div>
+      )}
 
       {job.error && (
         <div className="mt-3 border border-rose-500/30 bg-rose-950/20 p-3 text-xs leading-5 text-rose-300">
