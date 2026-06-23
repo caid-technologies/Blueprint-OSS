@@ -17,6 +17,7 @@ The backend is a **FastAPI** service that orchestrates agents, validates netlist
 
 ## API endpoints
 - `POST /api/generate` – run the pipeline and return IR + diagrams
+- `POST /api/alpha-signups` – capture alpha launch interest while deployed generation is gated
 - `GET /api/a2a/capabilities` – inspect agent transports and actions
 - `PUT /api/a2a/agents/{agent_id}` – register an agent listener
 - `POST /api/a2a/messages` – submit or broker an A2A message
@@ -39,6 +40,7 @@ The orchestrator runs an **ADK-style 7-agent pipeline** (implemented in `backend
 The A2A layer exposes Blueprint to external agents as a tool server and lightweight broker. REST long-polling, WebSocket, and MCP-style JSON-RPC are always mounted. Job metadata uses `JOB_METADATA_BACKEND=auto`, storing in Supabase when the main app database is Supabase and otherwise falling back to SQLite at `JOB_METADATA_DB_PATH` (default `./blueprint_jobs.db`). The TCP JSONL listener is opt-in with `A2A_SOCKET_ENABLED=true`.
 
 LLM configuration behavior:
+- `BLUEPRINT_DEPLOYMENT=true`: enables the deployment-only alpha gate. If live generation is unavailable, `/api/generate` is blocked and the frontend captures launch interest through `/api/alpha-signups`
 - `LLM_PROVIDER`: `gemini`, `openai`, `openai-compatible`, or `simulation`
 - `LLM_MODEL`: provider model ID
 - `OPENAI_API_KEY`: first-party OpenAI API key when `LLM_PROVIDER=openai`

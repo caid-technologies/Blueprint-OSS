@@ -14,6 +14,11 @@ from backend.database import (
     save_generated_project,
 )
 from backend.llm_providers import LLMProviderConfigError, LLMProviderValidation, build_llm_provider
+from backend.runtime_config import (
+    ALPHA_GENERATION_UNAVAILABLE_MESSAGE,
+    AlphaGenerationUnavailableError,
+    deployment_mode_enabled,
+)
 from backend.models import (
     HardwareIR, ProjectOverview, FunctionalRequirements, 
     ComponentInstance, ConnectionNet, PinReference, AssemblyStep, 
@@ -479,9 +484,17 @@ class HardwarePipelineOrchestrator:
             return project_ir
 
         if self.use_simulation:
+            if deployment_mode_enabled():
+                raise AlphaGenerationUnavailableError(ALPHA_GENERATION_UNAVAILABLE_MESSAGE)
             return self._generate_simulated_project(user_prompt, has_image=bool(image_bytes))
 
-        model_validation = self.validate_configured_model()
+        try:
+            model_validation = self.validate_configured_model()
+        except LLMProviderConfigError as e:
+            if deployment_mode_enabled():
+                logger.error("LLM provider validation failed in deployment mode: %s", e)
+                raise AlphaGenerationUnavailableError(ALPHA_GENERATION_UNAVAILABLE_MESSAGE) from e
+            raise
 
         try:
             logger.info("Starting 7-Agent Pipeline Execution...")
@@ -701,6 +714,9 @@ class HardwarePipelineOrchestrator:
         except LLMProviderConfigError:
             raise
         except Exception as e:
+            if deployment_mode_enabled():
+                logger.error("Pipeline execution encountered an error in deployment mode: %s", e)
+                raise AlphaGenerationUnavailableError(ALPHA_GENERATION_UNAVAILABLE_MESSAGE) from e
             logger.error(f"Pipeline execution encountered an error: {e}. Falling back to simulation.")
             return self._generate_simulated_project(user_prompt, has_image=bool(image_bytes))
 

@@ -57,6 +57,19 @@ class DBGeneratedProject(Base):
     created_at = Column(String, nullable=False)
 
 
+class DBAlphaSignup(Base):
+    __tablename__ = "alpha_signups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    email = Column(String, index=True, nullable=False)
+    organization = Column(String, nullable=True)
+    additional_info = Column(Text, nullable=True)
+    source = Column(String, nullable=False, default="web")
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(String, nullable=False)
+
+
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     value = os.getenv(name)
     if value is None:
@@ -227,6 +240,7 @@ def _verify_supabase_tables() -> None:
     client.table("component_templates").select("id").limit(1).execute()
     client.table("generated_projects").select("id").limit(1).execute()
     client.table("a2a_jobs").select("job_id").limit(1).execute()
+    client.table("alpha_signups").select("id").limit(1).execute()
 
 
 def init_db() -> None:
@@ -401,6 +415,44 @@ def update_generated_project_hardware_ir(project_id: str, hardware_ir: Dict[str,
         project.hardware_ir = hardware_ir
         db.commit()
         return True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def save_alpha_signup(
+    *,
+    name: str,
+    email: str,
+    organization: Optional[str],
+    additional_info: Optional[str],
+    source: str,
+    metadata: Optional[Dict[str, Any]],
+    created_at: str,
+) -> Any:
+    record = {
+        "name": name,
+        "email": email.lower(),
+        "organization": organization,
+        "additional_info": additional_info,
+        "source": source,
+        "metadata_json": metadata or {},
+        "created_at": created_at,
+    }
+    if DATABASE_BACKEND == "supabase":
+        response = get_supabase_client().table("alpha_signups").insert(record).execute()
+        rows = response.data or []
+        return _as_record(rows[0]) if rows else _as_record(record)
+
+    db = _sqlite_session()
+    try:
+        signup = DBAlphaSignup(**record)
+        db.add(signup)
+        db.commit()
+        db.refresh(signup)
+        return signup
     except Exception:
         db.rollback()
         raise

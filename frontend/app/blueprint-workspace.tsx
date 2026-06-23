@@ -61,6 +61,225 @@ const samplePrompts = [
   "Small controller for a low-voltage actuator or relay",
 ];
 
+const hardwareIdeaTerms = new Set([
+  "actuator",
+  "alarm",
+  "arduino",
+  "audio",
+  "battery",
+  "bluetooth",
+  "button",
+  "camera",
+  "charger",
+  "controller",
+  "cube",
+  "display",
+  "door",
+  "enclosure",
+  "esp32",
+  "fan",
+  "gps",
+  "haptic",
+  "iot",
+  "keyboard",
+  "knob",
+  "lamp",
+  "led",
+  "light",
+  "lock",
+  "logger",
+  "meter",
+  "monitor",
+  "module",
+  "moisture",
+  "motor",
+  "mp3",
+  "music",
+  "nfc",
+  "oled",
+  "plant",
+  "player",
+  "printer",
+  "pump",
+  "reader",
+  "relay",
+  "remote",
+  "rfid",
+  "robot",
+  "screen",
+  "sensor",
+  "servo",
+  "speaker",
+  "station",
+  "switch",
+  "tag",
+  "temperature",
+  "thermostat",
+  "timer",
+  "tracker",
+  "usb",
+  "wearable",
+  "wifi",
+  "wristband",
+]);
+
+const hardwareActionTerms = new Set([
+  "alert",
+  "alerts",
+  "blink",
+  "blinks",
+  "charge",
+  "charges",
+  "control",
+  "controls",
+  "detect",
+  "detects",
+  "display",
+  "displays",
+  "heat",
+  "lights",
+  "log",
+  "logs",
+  "measure",
+  "measures",
+  "monitor",
+  "monitors",
+  "move",
+  "moves",
+  "notify",
+  "notifies",
+  "open",
+  "opens",
+  "play",
+  "plays",
+  "pump",
+  "pumps",
+  "rotate",
+  "rotates",
+  "sense",
+  "senses",
+  "track",
+  "tracks",
+  "unlock",
+  "unlocks",
+  "vibrate",
+  "vibrates",
+  "water",
+  "watering",
+  "waters",
+]);
+
+const vaguePromptTerms = new Set([
+  "a",
+  "an",
+  "and",
+  "app",
+  "build",
+  "cool",
+  "create",
+  "device",
+  "for",
+  "hardware",
+  "idea",
+  "make",
+  "me",
+  "plan",
+  "project",
+  "prototype",
+  "something",
+  "stuff",
+  "that",
+  "the",
+  "thing",
+  "to",
+  "with",
+]);
+
+function tokenizePrompt(value: string) {
+  return value.toLowerCase().match(/[a-z0-9]+/g) || [];
+}
+
+function promptLooksLikeGibberish(value: string, tokens: string[]) {
+  const letters = value.toLowerCase().replace(/[^a-z]/g, "");
+  if (letters.length < 5) return false;
+
+  const hasKnownHardwareLanguage = tokens.some((token) => hardwareIdeaTerms.has(token) || hardwareActionTerms.has(token));
+  if (hasKnownHardwareLanguage) return false;
+
+  const vowelCount = letters.match(/[aeiou]/g)?.length || 0;
+  const vowelRatio = vowelCount / letters.length;
+  const longConsonantRun = /[bcdfghjklmnpqrstvwxyz]{5,}/.test(letters);
+  const lowVarietyPlaceholder = tokens.length <= 2 && new Set(letters).size <= 3 && letters.length >= 5;
+
+  return vowelRatio < 0.16 || longConsonantRun || lowVarietyPlaceholder;
+}
+
+function validateGenerationInput(value: string, hasImage: boolean) {
+  const promptText = value.trim();
+  if (!promptText) {
+    return {
+      isValid: hasImage,
+      message: hasImage ? null : "Provide a prompt or reference image.",
+    };
+  }
+
+  const tokens = tokenizePrompt(promptText);
+  const hasHardwareTerm = tokens.some((token) => hardwareIdeaTerms.has(token));
+  const hasActionTerm = tokens.some((token) => hardwareActionTerms.has(token));
+  const specificTokens = tokens.filter((token) => token.length >= 3 && !vaguePromptTerms.has(token));
+
+  if (!tokens.length) {
+    return {
+      isValid: false,
+      message: "Add a buildable hardware idea before compiling.",
+    };
+  }
+
+  if (promptLooksLikeGibberish(promptText, tokens)) {
+    return {
+      isValid: false,
+      message: "I could not read that as a hardware idea yet. Name a device and what it should do, or clear the text and use an image.",
+    };
+  }
+
+  if (tokens.length < 2 && !hasHardwareTerm) {
+    return {
+      isValid: false,
+      message: "Add a little more detail before compiling, like a device plus what it should sense, control, display, or move.",
+    };
+  }
+
+  if (!hasHardwareTerm && !hasActionTerm && specificTokens.length < 3) {
+    return {
+      isValid: false,
+      message: "Add a concrete hardware idea before compiling, like a device plus what it should sense, control, display, or move.",
+    };
+  }
+
+  if (!hasHardwareTerm && !hasActionTerm && tokens.length < 5) {
+    return {
+      isValid: false,
+      message: "Add what the build should do before compiling.",
+    };
+  }
+
+  return {
+    isValid: true,
+    message: null,
+  };
+}
+
+async function readApiErrorMessage(response: Response) {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === "string") return body.detail;
+  } catch {
+    // Fall through to a generic message.
+  }
+
+  return `Compilation server returned ${response.status}`;
+}
+
 const communityProjects = [
   {
     title: "Portable device",
@@ -84,6 +303,10 @@ type ProjectGalleryItem = {
   title: string;
   projectId: string;
   image: ProjectImageCandidate | null;
+};
+
+type AlphaGateConfig = {
+  gateActive: boolean;
 };
 
 const PROJECT_GALLERY_PAGE_SIZES = {
@@ -361,6 +584,18 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
   const [catalogComponents, setCatalogComponents] = useState<any[]>([]);
   const [serverStatus, setServerStatus] = useState<"connected" | "disconnected">("disconnected");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [generationInputNotice, setGenerationInputNotice] = useState<string | null>(null);
+  const [alphaGateConfig, setAlphaGateConfig] = useState<AlphaGateConfig>({
+    gateActive: false,
+  });
+  const [alphaSignupForm, setAlphaSignupForm] = useState({
+    name: "",
+    email: "",
+    organization: "",
+    additionalInfo: "",
+  });
+  const [alphaSignupStatus, setAlphaSignupStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
+  const [alphaSignupMessage, setAlphaSignupMessage] = useState<string | null>(null);
   const [generateProductImage, setGenerateProductImage] = useState(false);
   const [mechElectricalActive, setMechElectricalActive] = useState(true);
   const [mechToggles, setMechToggles] = useState({
@@ -381,6 +616,14 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
     () => buildProjectGalleryItems(projectHistory, projectGalleryImages),
     [projectHistory, projectGalleryImages]
   );
+  const generationInputValidation = useMemo(
+    () => validateGenerationInput(prompt, Boolean(selectedImage)),
+    [prompt, selectedImage]
+  );
+  const visibleGenerationInputNotice =
+    generationInputNotice || (prompt.trim() && !generationInputValidation.isValid ? generationInputValidation.message : null);
+  const hasGenerationInput = Boolean(prompt.trim() || selectedImage);
+  const alphaGateActive = alphaGateConfig.gateActive;
 
   const scrollToProjects = () => {
     projectsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -406,6 +649,7 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
 
   useEffect(() => {
     checkServerStatus();
+    fetchRuntimeConfig();
     fetchCatalog();
     fetchProjectHistory();
   }, []);
@@ -416,6 +660,21 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
       setServerStatus(res.ok ? "connected" : "disconnected");
     } catch {
       setServerStatus("disconnected");
+    }
+  };
+
+  const fetchRuntimeConfig = async () => {
+    try {
+      const res = await fetch(`${API_URL}/debug/config`);
+      if (!res.ok) return;
+
+      const config = await res.json();
+      const deployment = config.deployment || {};
+      setAlphaGateConfig({
+        gateActive: Boolean(deployment.alpha_generation_gate_active),
+      });
+    } catch (e) {
+      console.error("Error fetching runtime config", e);
     }
   };
 
@@ -531,11 +790,15 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onloadend = () => setSelectedImage(reader.result as string);
+    reader.onloadend = () => {
+      setGenerationInputNotice(null);
+      setSelectedImage(reader.result as string);
+    };
     reader.readAsDataURL(file);
   };
 
   const removeSelectedImage = () => {
+    setGenerationInputNotice(null);
     setSelectedImage(null);
     if (fileInputRefSidebar.current) fileInputRefSidebar.current.value = "";
     if (fileInputRefCenter.current) fileInputRefCenter.current.value = "";
@@ -699,10 +962,17 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
 
   const handleGenerate = async (event: React.FormEvent) => {
     event.preventDefault();
-    const promptText = prompt.trim() || "Infer a buildable hardware project from the uploaded reference image.";
-    if (!prompt.trim() && !selectedImage) return;
+    const validation = validateGenerationInput(prompt, Boolean(selectedImage));
+    if (!validation.isValid) {
+      setGenerationInputNotice(validation.message);
+      return;
+    }
 
+    const promptText = prompt.trim() || "Infer a buildable hardware project from the uploaded reference image.";
     const imageData = selectedImage;
+    let generatedProject = false;
+
+    setGenerationInputNotice(null);
     setIsLoading(true);
     checkServerStatus();
 
@@ -717,7 +987,19 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
         }),
       });
 
-      if (!res.ok) throw new Error("Compilation server failed");
+      if (!res.ok) {
+        const errorMessage = await readApiErrorMessage(res);
+        if (res.status === 400) {
+          setGenerationInputNotice(errorMessage);
+          return;
+        }
+        if (res.status === 503) {
+          setAlphaGateConfig({ gateActive: true });
+          setGenerationInputNotice(errorMessage);
+          return;
+        }
+        throw new Error(errorMessage);
+      }
 
       const data = await res.json();
       const ir = withProjectResponseMetadata(data.project_ir, data);
@@ -729,17 +1011,61 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
       if (projectId) syncProjectRoute(projectId);
       fetchProjectHistory();
       fetchA2aJobs(jobStatusFilter, { silent: true });
+      generatedProject = true;
     } catch (error) {
+      if (alphaGateActive) {
+        setAlphaSignupMessage("Generation is not available in this alpha deployment yet. Leave your information and we will follow up when it opens.");
+        return;
+      }
+
       console.warn("Using local simulation fallback", error);
       const mockRes = await runMockCompilation(promptText, imageData);
       setProjectIR(mockRes.project_ir);
       setMermaidCode(mockRes.mermaid_code);
       setSvgSchematic(mockRes.svg_schematic);
       buildReactFlowGraph(mockRes.project_ir);
+      generatedProject = true;
     } finally {
-      setSelectedImage(null);
-      setActiveTab("overview");
+      if (generatedProject) {
+        setSelectedImage(null);
+        setActiveTab("overview");
+      }
       setIsLoading(false);
+    }
+  };
+
+  const handleAlphaSignup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAlphaSignupStatus("submitting");
+    setAlphaSignupMessage(null);
+
+    try {
+      const res = await fetch(`${API_URL}/alpha-signups`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: alphaSignupForm.name,
+          email: alphaSignupForm.email,
+          organization: alphaSignupForm.organization || null,
+          additional_info: alphaSignupForm.additionalInfo || null,
+        }),
+      });
+
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+
+      const data = await res.json();
+      setAlphaSignupStatus("success");
+      setAlphaSignupMessage(data.message || "Thanks. We will follow up when generation opens.");
+      setAlphaSignupForm({
+        name: "",
+        email: "",
+        organization: "",
+        additionalInfo: "",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Signup failed. Please try again.";
+      setAlphaSignupStatus("error");
+      setAlphaSignupMessage(message);
     }
   };
 
@@ -1095,77 +1421,182 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
               Upload a photo, sketch, or short description. Get parts, wiring, cost, and build steps.
             </p>
 
-            <form onSubmit={handleGenerate} className="mt-8 border border-[#2c2f37] bg-[#17181d] p-3 text-left shadow-2xl shadow-black/30">
-              <div className="relative">
-                <textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="Describe what you want to build, or upload an image."
-                  className="min-h-[138px] w-full resize-none bg-transparent p-4 pr-16 pb-16 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-600"
-                />
-                <button
-                  type="submit"
-                  disabled={isLoading || (!prompt.trim() && !selectedImage)}
-                  className="absolute bottom-4 right-4 inline-flex h-10 w-10 items-center justify-center bg-white text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label="Compile hardware"
-                  title="Compile hardware"
-                >
-                  {isLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                </button>
-              </div>
-              {selectedImage && (
-                <div className="mb-3 flex items-center gap-3 border border-[#2c2f37] bg-black/30 p-2">
-                  <img src={selectedImage} alt="Attached reference" className="h-16 w-24 object-cover" />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold text-white">Image added</div>
-                    <div className="mt-1 text-[11px] text-slate-500">Blueprint will use this image to understand the design.</div>
+            {alphaGateActive ? (
+              <div className="mt-8 grid gap-3 text-left md:grid-cols-[0.95fr_1.05fr]">
+                <div className="border border-[#2c2f37] bg-[#17181d] p-5 shadow-2xl shadow-black/30">
+                  <div className="inline-flex items-center gap-2 border border-cyan-300/30 bg-cyan-300/10 px-3 py-1.5 text-xs font-black uppercase text-cyan-200">
+                    <Sparkles className="h-4 w-4" />
+                    Alpha
                   </div>
-                  <button type="button" onClick={removeSelectedImage} className="p-2 text-slate-500 hover:text-white" aria-label="Remove image">
-                    <X className="h-4 w-4" />
-                  </button>
+                  <h2 className="mt-5 text-2xl font-semibold leading-tight text-white">Generation is opening soon.</h2>
+                  <p className="mt-4 text-sm leading-6 text-slate-400">
+                    We are currently in alpha right now. Please view our generated projects below. To learn more about this project and when generation will be available, leave your information.
+                  </p>
+                  <div className="mt-5 border-t border-[#2c2f37] pt-4 text-xs leading-5 text-slate-500">
+                    Live generation is paused for this deployment while the model backend is being configured.
+                  </div>
                 </div>
-              )}
-              <div className="flex flex-col gap-3 border-t border-[#2c2f37] px-2 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-2">
-                  <input ref={fileInputRefCenter} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                  <button
-                    type="button"
-                    onClick={() => fileInputRefCenter.current?.click()}
-                    className="inline-flex h-10 w-10 items-center justify-center border border-[#2c2f37] text-slate-400 hover:bg-white hover:text-black"
-                    title="Add image"
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                  <label className="inline-flex h-10 cursor-pointer items-center gap-2 border border-[#2c2f37] px-3 text-xs font-black uppercase text-slate-400 hover:border-slate-500 hover:text-white">
-                    <input
-                      type="checkbox"
-                      checked={generateProductImage}
-                      onChange={(event) => setGenerateProductImage(event.target.checked)}
-                      className="peer sr-only"
-                    />
-                    <Sparkles className={`h-4 w-4 ${generateProductImage ? "text-cyan-300" : "text-slate-500"}`} />
-                    <span>Image model</span>
-                    <span className={`h-4 w-7 border transition ${generateProductImage ? "border-cyan-300 bg-cyan-300" : "border-[#3a3d46] bg-black"}`}>
-                      <span className={`block h-full w-3.5 bg-white transition ${generateProductImage ? "translate-x-3" : "translate-x-0"}`} />
-                    </span>
-                  </label>
-                </div>
-              </div>
-            </form>
 
-            <div className="mt-5 flex flex-wrap justify-center gap-2">
-              {samplePrompts.map((example) => (
-                <button
-                  key={example}
-                  type="button"
-                  onClick={() => setPrompt(example)}
-                  className="border border-[#2c2f37] bg-[#17181d] px-3 py-2 text-[11px] leading-5 text-slate-400 hover:border-slate-500 hover:text-white"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
+                <form onSubmit={handleAlphaSignup} className="border border-[#2c2f37] bg-[#17181d] p-5 shadow-2xl shadow-black/30">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="block text-xs font-semibold uppercase text-slate-500">
+                      Name
+                      <input
+                        required
+                        value={alphaSignupForm.name}
+                        onChange={(event) => setAlphaSignupForm((form) => ({ ...form, name: event.target.value }))}
+                        className="mt-2 h-11 w-full border border-[#2c2f37] bg-black px-3 text-sm normal-case text-white outline-none focus:border-cyan-300"
+                      />
+                    </label>
+                    <label className="block text-xs font-semibold uppercase text-slate-500">
+                      Email
+                      <input
+                        required
+                        type="email"
+                        value={alphaSignupForm.email}
+                        onChange={(event) => setAlphaSignupForm((form) => ({ ...form, email: event.target.value }))}
+                        className="mt-2 h-11 w-full border border-[#2c2f37] bg-black px-3 text-sm normal-case text-white outline-none focus:border-cyan-300"
+                      />
+                    </label>
+                  </div>
+                  <label className="mt-3 block text-xs font-semibold uppercase text-slate-500">
+                    Organization
+                    <input
+                      value={alphaSignupForm.organization}
+                      onChange={(event) => setAlphaSignupForm((form) => ({ ...form, organization: event.target.value }))}
+                      className="mt-2 h-11 w-full border border-[#2c2f37] bg-black px-3 text-sm normal-case text-white outline-none focus:border-cyan-300"
+                    />
+                  </label>
+                  <label className="mt-3 block text-xs font-semibold uppercase text-slate-500">
+                    Additional info
+                    <textarea
+                      value={alphaSignupForm.additionalInfo}
+                      onChange={(event) => setAlphaSignupForm((form) => ({ ...form, additionalInfo: event.target.value }))}
+                      className="mt-2 min-h-[96px] w-full resize-none border border-[#2c2f37] bg-black px-3 py-3 text-sm normal-case leading-6 text-white outline-none focus:border-cyan-300"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={alphaSignupStatus === "submitting"}
+                    className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 bg-white px-4 text-sm font-semibold text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {alphaSignupStatus === "submitting" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                    Join alpha updates
+                  </button>
+                  {alphaSignupMessage && (
+                    <div
+                      role="status"
+                      className={`mt-3 flex items-start gap-2 border px-3 py-2 text-xs leading-5 ${
+                        alphaSignupStatus === "success"
+                          ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
+                          : "border-amber-300/30 bg-amber-300/10 text-amber-100"
+                      }`}
+                    >
+                      {alphaSignupStatus === "success" ? <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+                      <span>{alphaSignupMessage}</span>
+                    </div>
+                  )}
+                </form>
+              </div>
+            ) : (
+              <>
+                <form onSubmit={handleGenerate} className="mt-8 border border-[#2c2f37] bg-[#17181d] p-3 text-left shadow-2xl shadow-black/30">
+                  <div className="relative">
+                    <textarea
+                      value={prompt}
+                      onChange={(event) => {
+                        setGenerationInputNotice(null);
+                        setPrompt(event.target.value);
+                      }}
+                      placeholder="Describe what you want to build, or upload an image."
+                      aria-invalid={Boolean(visibleGenerationInputNotice)}
+                      aria-describedby={visibleGenerationInputNotice ? "generation-input-notice" : undefined}
+                      className="min-h-[138px] w-full resize-none bg-transparent p-4 pr-16 pb-16 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-600"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isLoading || !hasGenerationInput}
+                      className="absolute bottom-4 right-4 inline-flex h-10 w-10 items-center justify-center bg-white text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={generationInputValidation.isValid ? "Compile hardware" : "Check hardware idea"}
+                      title={generationInputValidation.isValid ? "Compile hardware" : "Check hardware idea"}
+                    >
+                      {isLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {selectedImage && (
+                    <div className="mb-3 flex items-center gap-3 border border-[#2c2f37] bg-black/30 p-2">
+                      <img src={selectedImage} alt="Attached reference" className="h-16 w-24 object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold text-white">Image added</div>
+                        <div className="mt-1 text-[11px] text-slate-500">Blueprint will use this image to understand the design.</div>
+                      </div>
+                      <button type="button" onClick={removeSelectedImage} className="p-2 text-slate-500 hover:text-white" aria-label="Remove image">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                  {visibleGenerationInputNotice && (
+                    <div
+                      id="generation-input-notice"
+                      role="status"
+                      className="mb-3 flex items-start gap-2 border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100"
+                    >
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                      <span>{visibleGenerationInputNotice}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-3 border-t border-[#2c2f37] px-2 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <input ref={fileInputRefCenter} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRefCenter.current?.click()}
+                        className="inline-flex h-10 w-10 items-center justify-center border border-[#2c2f37] text-slate-400 hover:bg-white hover:text-black"
+                        title="Add image"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </button>
+                      <label className="inline-flex h-10 cursor-pointer items-center gap-2 border border-[#2c2f37] px-3 text-xs font-black uppercase text-slate-400 hover:border-slate-500 hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={generateProductImage}
+                          onChange={(event) => setGenerateProductImage(event.target.checked)}
+                          className="peer sr-only"
+                        />
+                        <Sparkles className={`h-4 w-4 ${generateProductImage ? "text-cyan-300" : "text-slate-500"}`} />
+                        <span>Image model</span>
+                        <span className={`h-4 w-7 border transition ${generateProductImage ? "border-cyan-300 bg-cyan-300" : "border-[#3a3d46] bg-black"}`}>
+                          <span className={`block h-full w-3.5 bg-white transition ${generateProductImage ? "translate-x-3" : "translate-x-0"}`} />
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </form>
+
+                <div className="mt-5 flex flex-wrap justify-center gap-2">
+                  {samplePrompts.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => {
+                        setGenerationInputNotice(null);
+                        setPrompt(example);
+                      }}
+                      className="border border-[#2c2f37] bg-[#17181d] px-3 py-2 text-[11px] leading-5 text-slate-400 hover:border-slate-500 hover:text-white"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
+
+          <ProjectGallery
+            sectionRef={projectsSectionRef}
+            items={projectGalleryItems}
+            onOpenProjectPage={(projectId) => router.push(projectRoute(projectId))}
+          />
 
           <section className="mt-8 grid gap-3 lg:grid-cols-[1.35fr_0.85fr]">
             <div className="border border-[#2c2f37] bg-[#17181d] p-4">
@@ -1213,12 +1644,6 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
               onViewAllProjects={scrollToProjects}
             />
           </section>
-
-          <ProjectGallery
-            sectionRef={projectsSectionRef}
-            items={projectGalleryItems}
-            onOpenProjectPage={(projectId) => router.push(projectRoute(projectId))}
-          />
         </main>
       </div>
     );

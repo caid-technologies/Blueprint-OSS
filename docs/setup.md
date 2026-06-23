@@ -57,6 +57,9 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 # DATABASE_BACKEND=sqlite
 SQLITE_DATABASE_URL=sqlite:///./blueprint.db
 
+# Deployment-only alpha gate
+# BLUEPRINT_DEPLOYMENT=true
+
 # Live LLM generation
 LLM_PROVIDER=openai
 OPENAI_API_KEY=your_openai_api_key_here
@@ -117,6 +120,7 @@ Notes:
 - Do not use anon, publishable, or `NEXT_PUBLIC_` Supabase keys for the backend. They obey RLS and cannot seed these tables by default.
 - If Supabase client variables are missing, the backend falls back to `SQLITE_DATABASE_URL` or `sqlite:///./blueprint.db`.
 - `DATABASE_BACKEND` can be `supabase` or `sqlite`.
+- `BLUEPRINT_DEPLOYMENT=true` enables the deployment-only alpha gate. When live LLM generation is unavailable, the frontend offers generated example projects plus a contact form that stores leads in `alpha_signups`.
 - `LLM_PROVIDER` can be `gemini`, `openai`, `openai-compatible`, or `simulation`.
 - `OPENAI_API_KEY` enables first-party OpenAI live structured generation when `LLM_PROVIDER=openai`.
 - `OPENAI_RESPONSE_FORMAT` defaults to `json_schema` for OpenAI. You can set it to `json_object` for older JSON mode or `none` to omit `response_format`.

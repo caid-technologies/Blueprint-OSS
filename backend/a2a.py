@@ -16,9 +16,14 @@ from backend.database import update_generated_project_hardware_ir
 from backend.image_providers import build_image_provider, get_image_output_debug_config
 from backend.job_store import JOB_STORE
 from backend.models import ComponentInstance, ConnectionNet
+from backend.runtime_config import (
+    ALPHA_GENERATION_UNAVAILABLE_MESSAGE,
+    AlphaGenerationUnavailableError,
+    deployment_runtime_config,
+)
 from backend.storage import get_image_storage_config, upload_image_to_supabase_s3
 from backend.utils import generate_mermaid_chart, generate_svg_schematic
-from backend.validation import validate_circuit
+from backend.validation import get_generation_input_issue, validate_circuit
 
 
 logger = logging.getLogger(__name__)
@@ -316,6 +321,9 @@ def build_generation_response(
 ) -> Dict[str, Any]:
     prompt_text = (prompt or "").strip()
     has_prompt = bool(prompt_text)
+    input_issue = get_generation_input_issue(prompt_text, has_image=bool(image_data))
+    if input_issue:
+        raise ValueError(input_issue)
     if not has_prompt and not image_data:
         raise ValueError("Provide a prompt or reference image.")
     if not has_prompt:
@@ -329,6 +337,10 @@ def build_generation_response(
         image_bytes, image_mime_type = None, None
 
     orchestrator = HardwarePipelineOrchestrator()
+    llm_config = orchestrator.get_debug_config()
+    if deployment_runtime_config(llm_config)["alpha_generation_gate_active"]:
+        raise AlphaGenerationUnavailableError(ALPHA_GENERATION_UNAVAILABLE_MESSAGE)
+
     ir = orchestrator.generate_project(prompt_text, image_bytes=image_bytes, image_mime_type=image_mime_type)
 
     if image_data:

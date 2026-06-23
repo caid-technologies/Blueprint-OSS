@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 import sys
 import types
 from typing import Any, Dict, List
@@ -38,9 +39,11 @@ from backend.database import (
     init_db,
     list_component_templates,
     list_generated_projects,
+    save_alpha_signup,
 )
 from backend.seed_db import seed_database
 from backend.models import (
+    AlphaSignupRequest, AlphaSignupResponse,
     GenerateProjectRequest, HardwareIR, ValidationReport, 
     ComponentInstance, ConnectionNet, ValidationIssue
 )
@@ -59,8 +62,13 @@ from backend.a2a import (
 )
 from backend.image_providers import get_image_output_debug_config
 from backend.job_store import JOB_STORE
+from backend.runtime_config import (
+    ALPHA_GENERATION_UNAVAILABLE_MESSAGE,
+    AlphaGenerationUnavailableError,
+    deployment_runtime_config,
+)
 from backend.storage import get_image_storage_config, hydrate_image_storage_metadata
-from backend.validation import validate_circuit
+from backend.validation import get_generation_input_issue, validate_circuit
 from backend.utils import generate_mermaid_chart, generate_svg_schematic
 
 app = FastAPI(
@@ -107,6 +115,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def _deployment_runtime_config(llm_config: Dict[str, Any]) -> Dict[str, Any]:
+    return deployment_runtime_config(llm_config, signup_storage=get_database_config()["client"])
+
+
 # Initialize and seed database on startup
 @app.on_event("startup")
 async def startup_event():
@@ -146,8 +159,10 @@ def debug_config_endpoint():
     """
     try:
         orchestrator = HardwarePipelineOrchestrator()
+        llm_config = orchestrator.get_debug_config()
         return {
-            **orchestrator.get_debug_config(),
+            **llm_config,
+            "deployment": _deployment_runtime_config(llm_config),
             "database": get_database_config(),
             "job_metadata": JOB_STORE.get_config(),
             "image_output": get_image_output_debug_config(),
@@ -162,6 +177,18 @@ def generate_project_endpoint(request: GenerateProjectRequest):
     Submits a natural language hardware idea and optional multimodal reference image.
     Runs the 7-agent compilation workflow, circuit safety auditor, and returns a verified Hardware IR, SVG schematic, and Mermaid diagram.
     """
+    llm_config = HardwarePipelineOrchestrator().get_debug_config()
+    deployment_config = _deployment_runtime_config(llm_config)
+    if deployment_config["alpha_generation_gate_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ALPHA_GENERATION_UNAVAILABLE_MESSAGE,
+        )
+
+    input_issue = get_generation_input_issue(request.prompt, has_image=bool(request.image_data))
+    if input_issue:
+        raise HTTPException(status_code=400, detail=input_issue)
+
     job_id = f"job_frontend_{uuid4().hex}"
     message_id = f"msg_{uuid4().hex}"
     payload = {
@@ -195,9 +222,38 @@ def generate_project_endpoint(request: GenerateProjectRequest):
     except ValueError as e:
         JOB_STORE.mark_failed(job_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
+    except AlphaGenerationUnavailableError as e:
+        JOB_STORE.mark_failed(job_id, str(e))
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
     except Exception as e:
         JOB_STORE.mark_failed(job_id, str(e))
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+
+@app.post("/alpha-signups", response_model=AlphaSignupResponse)
+def alpha_signup_endpoint(request: AlphaSignupRequest):
+    """
+    Captures alpha access interest while deployed generation is unavailable.
+    """
+    try:
+        llm_config = HardwarePipelineOrchestrator().get_debug_config()
+        deployment_config = _deployment_runtime_config(llm_config)
+        save_alpha_signup(
+            name=request.name,
+            email=request.email,
+            organization=request.organization,
+            additional_info=request.additional_info,
+            source="web-alpha-gate",
+            metadata={
+                "deployment": deployment_config,
+                "provider": llm_config.get("provider"),
+                "requested_model": llm_config.get("requested_model"),
+            },
+            created_at=datetime.utcnow().isoformat() + "Z",
+        )
+        return AlphaSignupResponse(ok=True, message="Thanks. We will follow up when generation opens.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Signup failed: {str(e)}")
 
 
 @app.get("/a2a/capabilities")

@@ -1,5 +1,194 @@
+import re
 from typing import List, Dict, Set, Optional
 from backend.models import ComponentInstance, ConnectionNet, ValidationIssue, PinDefinition, ValidationSummary
+
+HARDWARE_IDEA_TERMS: Set[str] = {
+    "actuator",
+    "alarm",
+    "arduino",
+    "audio",
+    "battery",
+    "bluetooth",
+    "button",
+    "camera",
+    "charger",
+    "controller",
+    "cube",
+    "display",
+    "door",
+    "enclosure",
+    "esp32",
+    "fan",
+    "gps",
+    "haptic",
+    "iot",
+    "keyboard",
+    "knob",
+    "lamp",
+    "led",
+    "light",
+    "lock",
+    "logger",
+    "meter",
+    "monitor",
+    "module",
+    "moisture",
+    "motor",
+    "mp3",
+    "music",
+    "nfc",
+    "oled",
+    "plant",
+    "player",
+    "printer",
+    "pump",
+    "reader",
+    "relay",
+    "remote",
+    "rfid",
+    "robot",
+    "screen",
+    "sensor",
+    "servo",
+    "speaker",
+    "station",
+    "switch",
+    "tag",
+    "temperature",
+    "thermostat",
+    "timer",
+    "tracker",
+    "usb",
+    "wearable",
+    "wifi",
+    "wristband",
+}
+
+HARDWARE_ACTION_TERMS: Set[str] = {
+    "alert",
+    "alerts",
+    "blink",
+    "blinks",
+    "charge",
+    "charges",
+    "control",
+    "controls",
+    "detect",
+    "detects",
+    "display",
+    "displays",
+    "heat",
+    "lights",
+    "log",
+    "logs",
+    "measure",
+    "measures",
+    "monitor",
+    "monitors",
+    "move",
+    "moves",
+    "notify",
+    "notifies",
+    "open",
+    "opens",
+    "play",
+    "plays",
+    "pump",
+    "pumps",
+    "rotate",
+    "rotates",
+    "sense",
+    "senses",
+    "track",
+    "tracks",
+    "unlock",
+    "unlocks",
+    "vibrate",
+    "vibrates",
+    "water",
+    "watering",
+    "waters",
+}
+
+VAGUE_PROMPT_TERMS: Set[str] = {
+    "a",
+    "an",
+    "and",
+    "app",
+    "build",
+    "cool",
+    "create",
+    "device",
+    "for",
+    "hardware",
+    "idea",
+    "make",
+    "me",
+    "plan",
+    "project",
+    "prototype",
+    "something",
+    "stuff",
+    "that",
+    "the",
+    "thing",
+    "to",
+    "with",
+}
+
+
+def _tokenize_prompt(prompt: str) -> List[str]:
+    return re.findall(r"[a-z0-9]+", prompt.lower())
+
+
+def _prompt_looks_like_gibberish(prompt: str, tokens: List[str]) -> bool:
+    letters = re.sub(r"[^a-z]", "", prompt.lower())
+    if len(letters) < 5:
+        return False
+
+    has_known_hardware_language = any(token in HARDWARE_IDEA_TERMS or token in HARDWARE_ACTION_TERMS for token in tokens)
+    if has_known_hardware_language:
+        return False
+
+    vowel_count = len(re.findall(r"[aeiou]", letters))
+    vowel_ratio = vowel_count / len(letters)
+    long_consonant_run = bool(re.search(r"[bcdfghjklmnpqrstvwxyz]{5,}", letters))
+    low_variety_placeholder = len(tokens) <= 2 and len(set(letters)) <= 3 and len(letters) >= 5
+
+    return vowel_ratio < 0.16 or long_consonant_run or low_variety_placeholder
+
+
+def get_generation_input_issue(prompt: str, has_image: bool = False) -> Optional[str]:
+    """
+    Returns a user-facing reason when the generation input is too vague to compile.
+    Image-only generation is valid because the pipeline can infer from the reference.
+    """
+    prompt_text = (prompt or "").strip()
+    if not prompt_text:
+        return None if has_image else "Provide a prompt or reference image."
+
+    tokens = _tokenize_prompt(prompt_text)
+    if not tokens:
+        return "Add a buildable hardware idea before compiling."
+
+    has_hardware_term = any(token in HARDWARE_IDEA_TERMS for token in tokens)
+    has_action_term = any(token in HARDWARE_ACTION_TERMS for token in tokens)
+    specific_tokens = [token for token in tokens if len(token) >= 3 and token not in VAGUE_PROMPT_TERMS]
+
+    if _prompt_looks_like_gibberish(prompt_text, tokens):
+        return "I could not read that as a hardware idea yet. Name a device and what it should do, or clear the text and use an image."
+
+    if len(tokens) < 2 and not has_hardware_term:
+        return "Add a little more detail before compiling, like a device plus what it should sense, control, display, or move."
+
+    if not has_hardware_term and not has_action_term and len(specific_tokens) < 3:
+        return "Add a concrete hardware idea before compiling, like a device plus what it should sense, control, display, or move."
+
+    if not has_hardware_term and not has_action_term and len(tokens) < 5:
+        return "Add what the build should do before compiling."
+
+    return None
+
 
 def check_safety_violations(prompt: str) -> Optional[str]:
     """

@@ -107,6 +107,7 @@ Environment variables (recommended via a repo-root `.env`; see `.env.example`):
 - `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY`: Backend-only Supabase key for writes. Do not use anon/publishable keys.
 - `DATABASE_BACKEND`: Optional override: `supabase` or `sqlite`.
 - `SQLITE_DATABASE_URL`: SQLite fallback URL (default: `sqlite:///./blueprint.db`).
+- `BLUEPRINT_DEPLOYMENT`: When `true`, deployed builds without a live LLM show generated examples plus an alpha signup form instead of running generation.
 - `LLM_PROVIDER`: Live generation provider: `gemini`, `openai`, `openai-compatible`, or `simulation`.
 - `OPENAI_API_KEY`: API key for first-party OpenAI when `LLM_PROVIDER=openai`.
 - `OPENAI_MODEL`: OpenAI model ID. The example default is `gpt-4o-mini`.

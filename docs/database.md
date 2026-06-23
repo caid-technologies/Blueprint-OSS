@@ -41,6 +41,16 @@ A2A job metadata follows `JOB_METADATA_BACKEND`:
 - SQLite path override: `JOB_METADATA_DB_PATH`
 - Stored data: job ids, sender/recipient/action, lifecycle status, timestamps, redacted payload metadata, compact result summaries, and errors
 
+### alpha_signups
+Alpha access leads captured when `BLUEPRINT_DEPLOYMENT=true` and live LLM generation is unavailable.
+- `name`
+- `email`
+- `organization`
+- `additional_info`
+- `source`
+- `metadata_json`
+- `created_at`
+
 ## Seeding the database
 Seed data is defined in `backend/seed_db.py`. Running:
 ```bash
