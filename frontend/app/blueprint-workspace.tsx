@@ -86,6 +86,12 @@ type ProjectGalleryItem = {
   image: ProjectImageCandidate | null;
 };
 
+const PROJECT_GALLERY_PAGE_SIZES = {
+  mobile: 3,
+  tablet: 6,
+  desktop: 8,
+} as const;
+
 const pipelineMermaidCode = `graph LR
   IMAGE["Image Input"] --> FEATURES["Feature Extraction"]
   FEATURES --> IR["Typed Hardware IR (Pydantic JSON)"]
@@ -1308,6 +1314,30 @@ function ProjectGallery({
   items: ProjectGalleryItem[];
   onOpenProjectPage: (projectId: string) => void;
 }) {
+  const pageSize = useProjectGalleryPageSize();
+  const [currentPage, setCurrentPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(currentPage, pageCount - 1);
+  const firstVisibleItem = safePage * pageSize;
+  const visibleItems = items.slice(firstVisibleItem, firstVisibleItem + pageSize);
+  const showingStart = items.length ? firstVisibleItem + 1 : 0;
+  const showingEnd = Math.min(items.length, firstVisibleItem + visibleItems.length);
+  const pageMarkers = buildProjectGalleryPageMarkers(safePage, pageCount);
+
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [items.length, pageSize]);
+
+  useEffect(() => {
+    if (safePage !== currentPage) {
+      setCurrentPage(safePage);
+    }
+  }, [currentPage, safePage]);
+
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.min(Math.max(page, 0), pageCount - 1));
+  };
+
   return (
     <section ref={sectionRef} id="all-projects" className="mt-16 border-t border-[#292b31] pt-12">
       <div className="mb-6 flex flex-col gap-3">
@@ -1323,15 +1353,78 @@ function ProjectGallery({
       </div>
 
       {items.length ? (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {items.map((item) => (
-            <ProjectGalleryCard
-              key={item.key}
-              item={item}
-              onOpenProjectPage={() => onOpenProjectPage(item.projectId)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {visibleItems.map((item) => (
+              <ProjectGalleryCard
+                key={item.key}
+                item={item}
+                onOpenProjectPage={() => onOpenProjectPage(item.projectId)}
+              />
+            ))}
+          </div>
+
+          {pageCount > 1 && (
+            <div className="mt-5 flex flex-col gap-3 border border-[#2c2f37] bg-[#17181d] p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                Showing {showingStart}-{showingEnd} of {items.length}
+              </div>
+
+              <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] gap-2 sm:flex sm:items-center">
+                <button
+                  type="button"
+                  onClick={() => goToPage(safePage - 1)}
+                  disabled={safePage === 0}
+                  className="inline-flex h-10 w-11 items-center justify-center border border-[#2a2c33] text-white transition hover:bg-white hover:text-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white"
+                  aria-label="Previous projects page"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+
+                <div className="hidden items-center gap-2 sm:flex">
+                  {pageMarkers.map((marker, index) => (
+                    marker === "gap" ? (
+                      <span
+                        key={`gap-${index}`}
+                        className="flex h-10 min-w-7 items-center justify-center text-xs font-black text-slate-600"
+                      >
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={marker}
+                        type="button"
+                        onClick={() => goToPage(marker)}
+                        aria-current={marker === safePage ? "page" : undefined}
+                        className={`h-10 min-w-10 border px-3 text-xs font-black uppercase transition ${
+                          marker === safePage
+                            ? "border-white bg-white text-black"
+                            : "border-[#2a2c33] text-slate-400 hover:bg-white hover:text-black"
+                        }`}
+                      >
+                        {marker + 1}
+                      </button>
+                    )
+                  ))}
+                </div>
+
+                <div className="flex h-10 items-center justify-center border border-[#2a2c33] text-xs font-black uppercase tracking-[0.14em] text-slate-400 sm:hidden">
+                  Page {safePage + 1} / {pageCount}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => goToPage(safePage + 1)}
+                  disabled={safePage >= pageCount - 1}
+                  className="inline-flex h-10 w-11 items-center justify-center border border-[#2a2c33] text-white transition hover:bg-white hover:text-black disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white"
+                  aria-label="Next projects page"
+                >
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <div className="border border-[#2c2f37] bg-[#17181d] p-8 text-sm leading-6 text-slate-500">
           No saved projects yet.
@@ -1339,6 +1432,58 @@ function ProjectGallery({
       )}
     </section>
   );
+}
+
+function buildProjectGalleryPageMarkers(currentPage: number, pageCount: number): Array<number | "gap"> {
+  if (pageCount <= 7) {
+    return Array.from({ length: pageCount }, (_, index) => index);
+  }
+
+  const markers = new Set([0, pageCount - 1, currentPage]);
+
+  if (currentPage > 0) {
+    markers.add(currentPage - 1);
+  }
+
+  if (currentPage < pageCount - 1) {
+    markers.add(currentPage + 1);
+  }
+
+  const sortedMarkers = Array.from(markers).sort((a, b) => a - b);
+  return sortedMarkers.flatMap((marker, index) => {
+    const previousMarker = sortedMarkers[index - 1];
+    return index > 0 && marker - previousMarker > 1 ? ["gap", marker] : [marker];
+  });
+}
+
+function useProjectGalleryPageSize() {
+  const [pageSize, setPageSize] = useState<number>(PROJECT_GALLERY_PAGE_SIZES.mobile);
+
+  useEffect(() => {
+    const desktopQuery = window.matchMedia("(min-width: 1280px)");
+    const tabletQuery = window.matchMedia("(min-width: 640px)");
+
+    const updatePageSize = () => {
+      if (desktopQuery.matches) {
+        setPageSize(PROJECT_GALLERY_PAGE_SIZES.desktop);
+      } else if (tabletQuery.matches) {
+        setPageSize(PROJECT_GALLERY_PAGE_SIZES.tablet);
+      } else {
+        setPageSize(PROJECT_GALLERY_PAGE_SIZES.mobile);
+      }
+    };
+
+    updatePageSize();
+    desktopQuery.addEventListener("change", updatePageSize);
+    tabletQuery.addEventListener("change", updatePageSize);
+
+    return () => {
+      desktopQuery.removeEventListener("change", updatePageSize);
+      tabletQuery.removeEventListener("change", updatePageSize);
+    };
+  }, []);
+
+  return pageSize;
 }
 
 function ProjectGalleryCard({
@@ -1349,23 +1494,29 @@ function ProjectGalleryCard({
   onOpenProjectPage: () => void;
 }) {
   return (
-    <article className="group border border-[#2c2f37] bg-[#17181d]">
-      <div className="aspect-[4/3] overflow-hidden bg-[#0f1014]">
+    <article className="group overflow-hidden border border-[#2c2f37] bg-[#17181d]">
+      <div className="aspect-square overflow-hidden border-b border-[#2c2f37] bg-[#0f1014] sm:aspect-[4/3]">
         {item.image ? (
-          <img src={item.image.src} alt={item.image.label} className="h-full w-full object-cover" />
+          <img
+            src={item.image.src}
+            alt={`${item.title} preview`}
+            className="h-full w-full object-contain p-2 transition duration-300 group-hover:scale-[1.015] sm:object-cover sm:p-0"
+          />
         ) : (
-          <div className="flex h-full items-center justify-center border-b border-[#2c2f37] text-xs font-black uppercase tracking-[0.18em] text-slate-600">
+          <div className="flex h-full items-center justify-center text-xs font-black uppercase tracking-[0.18em] text-slate-600">
             No image
           </div>
         )}
       </div>
 
-      <div className="p-4">
-        <h3 className="truncate text-sm font-black uppercase tracking-[0.08em] text-white">{item.title}</h3>
+      <div className="flex min-h-[112px] flex-col justify-between gap-4 p-4">
+        <h3 className="line-clamp-2 min-h-10 break-words text-sm font-black uppercase leading-5 tracking-[0.08em] text-white">
+          {item.title}
+        </h3>
         <button
           type="button"
           onClick={onOpenProjectPage}
-          className="mt-4 inline-flex h-10 items-center justify-center gap-2 border border-[#2a2c33] px-4 text-xs font-black uppercase text-white hover:bg-white hover:text-black"
+          className="inline-flex h-10 w-full items-center justify-between gap-2 border border-[#2a2c33] px-4 text-xs font-black uppercase text-white transition hover:bg-white hover:text-black sm:w-fit sm:justify-center"
         >
           Project page
           <ArrowRight className="h-4 w-4" />
