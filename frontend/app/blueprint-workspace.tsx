@@ -650,7 +650,6 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
   const [videoGallery, setVideoGallery] = useState<StoredVideoInfo[]>([]);
   const [videoGalleryLoading, setVideoGalleryLoading] = useState(false);
   const [videoGalleryError, setVideoGalleryError] = useState<string | null>(null);
-  const [showHeaderRecent, setShowHeaderRecent] = useState(false);
   const [projectGalleryImages, setProjectGalleryImages] = useState<Record<string, ProjectImageCandidate | null>>({});
   const [routeProjectError, setRouteProjectError] = useState<string | null>(null);
   const [catalogComponents, setCatalogComponents] = useState<any[]>([]);
@@ -1657,41 +1656,6 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
                 <Handshake className="h-4 w-4 text-slate-300" />
                 <span className="hidden sm:inline">Partners</span>
               </Link>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowHeaderRecent((s) => !s)}
-                  className="inline-flex items-center gap-2 border border-[#2c2f37] px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white hover:text-black"
-                >
-                  <History className="h-4 w-4 text-slate-300" />
-                  Recent projects
-                </button>
-
-                {showHeaderRecent && (
-                  <div className="absolute right-0 mt-2 w-64 rounded border border-[#2c2f37] bg-[#17181d] p-2 text-sm">
-                    {projectHistory.length > 0 ? (
-                      <div className="space-y-1">
-                        {projectHistory.slice(0, 4).map((proj: any) => (
-                          <button
-                            key={proj.project_id}
-                            type="button"
-                            onClick={() => {
-                              setShowHeaderRecent(false);
-                              loadOldProject(proj.project_id);
-                            }}
-                            className="w-full text-left px-2 py-2 hover:bg-black/30"
-                          >
-                            <div className="truncate font-semibold text-white">{proj.title || proj.prompt || "Untitled"}</div>
-                            <div className="truncate text-xs text-slate-500">{(proj.prompt || "").slice(0, 60)}</div>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-slate-500 p-2">No recent projects</div>
-                    )}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </header>
