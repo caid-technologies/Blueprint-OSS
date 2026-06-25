@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ReactFlow, {
   Background,
@@ -17,6 +18,8 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import MechanicalScene from "../components/mechanical-scene";
+import PartnerLogoMarquee from "../components/partner-logo-marquee";
+import { partners } from "../lib/partners";
 import {
   Sparkles,
   Wrench,
@@ -44,6 +47,7 @@ import {
   Paperclip,
   X,
   ExternalLink,
+  Handshake,
 } from "lucide-react";
 
 const DEFAULT_API_URL = process.env.NODE_ENV === "development" ? "http://localhost:8000" : "";
@@ -1644,6 +1648,15 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
               }`}>
                 {serverStatus === "connected" ? "API connected" : "Demo mode"}
               </span>
+              <Link
+                href="/partners"
+                className="inline-flex h-10 items-center gap-2 border border-[#2c2f37] px-3 text-xs font-semibold text-slate-300 hover:bg-white hover:text-black"
+                aria-label="Partners"
+                title="Partners"
+              >
+                <Handshake className="h-4 w-4 text-slate-300" />
+                <span className="hidden sm:inline">Partners</span>
+              </Link>
               <div className="relative">
                 <button
                   type="button"
@@ -1886,6 +1899,10 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
               compact
               onViewAllProjects={scrollToProjects}
             />
+          </section>
+
+          <section className="mx-auto mt-10 w-full max-w-6xl">
+            <PartnerLogoMarquee partners={partners} hrefPrefix="/partners" />
           </section>
         </main>
       </div>
