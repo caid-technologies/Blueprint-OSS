@@ -1,9 +1,9 @@
 "use client";
 
 import { Html, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Dimensions = { x_mm: number; y_mm: number; z_mm: number };
 
@@ -382,12 +382,27 @@ function axisColor(axis: "X" | "Y" | "Z") {
   return "#facc15";
 }
 
-function SceneShell({ dimensions, scale }: { dimensions: Dimensions; scale: number }) {
+function ResponsiveCamera() {
+  const { camera, size } = useThree();
+
+  useEffect(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+
+    const compact = size.width < 520;
+    camera.position.set(compact ? 14 : 9.5, compact ? 8 : 6.8, compact ? 15 : 10.5);
+    camera.fov = compact ? 54 : 40;
+    camera.updateProjectionMatrix();
+  }, [camera, size.width]);
+
+  return null;
+}
+
+function SceneShell({ dimensions, scale, rotating }: { dimensions: Dimensions; scale: number; rotating: boolean }) {
   const shellRef = useRef<THREE.Group>(null);
 
   useFrame(({ clock }) => {
     if (!shellRef.current) return;
-    shellRef.current.rotation.y = Math.sin(clock.elapsedTime * 0.24) * 0.018;
+    shellRef.current.rotation.y = rotating ? Math.sin(clock.elapsedTime * 0.24) * 0.018 : 0;
   });
 
   const width = dimensions.x_mm / scale;
@@ -449,7 +464,7 @@ function AxisMeasure({
         <boxGeometry args={lineArgs} />
         <meshBasicMaterial color={color} />
       </mesh>
-      <Html transform center position={labelPosition} distanceFactor={8}>
+      <Html transform sprite center position={labelPosition} distanceFactor={8}>
         <div className="pointer-events-none border border-white/10 bg-black/80 px-2.5 py-1 text-center font-black uppercase tracking-[0.16em] shadow-xl">
           <div style={{ color }} className="text-[12px] leading-none">
             {axis} axis
@@ -511,7 +526,7 @@ function ModuleBlock({
         <boxGeometry args={[size[0] * 1.04, size[1] * 1.04, size[2] * 1.04]} />
         <meshBasicMaterial color={selected ? "#ffffff" : spec.accent} wireframe transparent opacity={selected ? 0.72 : 0.34} />
       </mesh>
-      <Html transform center position={[0, size[1] * 0.95 + 0.1, 0]} distanceFactor={9}>
+      <Html transform sprite center position={[0, size[1] * 0.95 + 0.1, 0]} distanceFactor={9}>
         <button
           type="button"
           onClick={() => onSelect(spec)}
@@ -563,7 +578,7 @@ function RelationshipLink({
           <meshBasicMaterial color={color} transparent opacity={0.7} />
         </mesh>
       </group>
-      <Html transform center position={geometry.midpoint.toArray() as [number, number, number]} distanceFactor={10}>
+      <Html transform sprite center position={geometry.midpoint.toArray() as [number, number, number]} distanceFactor={10}>
         <div className="pointer-events-none whitespace-nowrap border border-white/10 bg-black/75 px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] text-white/80 shadow-lg">
           <span style={{ color }}>{relationship.axis}</span>
           <span className="mx-1 text-white/35">/</span>
@@ -615,10 +630,11 @@ export default function MechanicalScene({
         <ambientLight intensity={0.72} />
         <directionalLight position={[9, 12, 8]} intensity={1.6} color="#f5edff" castShadow />
         <directionalLight position={[-8, 4, -6]} intensity={0.55} color="#60a5fa" />
+        <ResponsiveCamera />
 
         <group position={[0, 0.1, 0]}>
           {toggles.structural && <gridHelper args={[42, 42, "#2b2f39", "#1f232b"]} position={[0, -dimensions.z_mm / scale / 2 - 0.72, 0]} />}
-          {toggles.enclosure && <SceneShell dimensions={dimensions} scale={scale} />}
+          {toggles.enclosure && <SceneShell dimensions={dimensions} scale={scale} rotating={Boolean(toggles.bodyRotation)} />}
 
           {visiblePlacements
             .filter((placement) => !(placement.layer === "enclosure" || isEnclosureLabel(placement.label)))
@@ -642,16 +658,25 @@ export default function MechanicalScene({
           <AxisMeasure axis="Z" value={dimensions.z_mm} dimensions={dimensions} scale={scale} />
 
           {toggles.print && (
-            <Html transform center position={[0, dimensions.z_mm / scale / 2 + 0.8, 0]} distanceFactor={10}>
-              <div className="pointer-events-none text-center font-black uppercase tracking-[0.16em] text-white drop-shadow-[0_0_12px_rgba(0,0,0,0.7)]">
-                <div className="text-base">{shellLabel}</div>
-                <div className="mt-1 text-[10px] text-violet-200">Component placement mapped to X / Y / Z coordinates</div>
+            <Html transform sprite center position={[0, dimensions.z_mm / scale / 2 + 0.8, 0]} distanceFactor={10}>
+              <div className="pointer-events-none max-w-[260px] text-center font-black uppercase tracking-[0.12em] text-white drop-shadow-[0_0_12px_rgba(0,0,0,0.7)] sm:max-w-none sm:tracking-[0.16em]">
+                <div className="text-xs leading-tight sm:text-base">{shellLabel}</div>
+                <div className="mt-1 text-[8px] leading-tight text-violet-200 sm:text-[10px]">Component placement mapped to X / Y / Z coordinates</div>
               </div>
             </Html>
           )}
         </group>
 
-        <OrbitControls enableDamping enablePan minPolarAngle={0.45} maxPolarAngle={1.38} minDistance={7} maxDistance={22} autoRotate autoRotateSpeed={0.26} />
+        <OrbitControls
+          enableDamping
+          enablePan
+          minPolarAngle={0.45}
+          maxPolarAngle={1.38}
+          minDistance={7}
+          maxDistance={22}
+          autoRotate={Boolean(toggles.bodyRotation)}
+          autoRotateSpeed={0.26}
+        />
       </Canvas>
 
       <div className="pointer-events-none absolute left-5 top-5 border border-[#30323a] bg-black/70 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">

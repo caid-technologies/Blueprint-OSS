@@ -679,6 +679,7 @@ export function BlueprintWorkspace({ routeProjectId = null }: HomeProps = {}) {
     mechanism: true,
     misc: false,
     print: true,
+    bodyRotation: false,
   });
 
   const fileInputRefSidebar = useRef<HTMLInputElement>(null);
@@ -2644,12 +2645,13 @@ function MechanicalPanel({
               key={key}
               type="button"
               onClick={() => setToggles({ ...toggles, [key]: !value })}
+              aria-pressed={value}
               className={`flex items-center gap-2 text-xs font-black uppercase ${
                 value ? layerColor(key) : "text-slate-700"
               }`}
             >
-              <Eye className="h-3 w-3" />
-              {key === "print" ? "3D Print" : key}
+              {key === "bodyRotation" ? <RefreshCw className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              {mechanicalToggleLabel(key)}
             </button>
           ))}
         </div>
@@ -3498,7 +3500,14 @@ function layerColor(key: string) {
   if (key === "enclosure") return "text-emerald-400";
   if (key === "mechanism") return "text-amber-400";
   if (key === "print") return "text-violet-300";
+  if (key === "bodyRotation") return "text-rose-300";
   return "text-slate-400";
+}
+
+function mechanicalToggleLabel(key: string) {
+  if (key === "print") return "3D Print";
+  if (key === "bodyRotation") return "Body Rotate";
+  return key;
 }
 
 function emptyMetrics() {
