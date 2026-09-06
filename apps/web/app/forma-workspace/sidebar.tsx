@@ -24,7 +24,10 @@ import {
 
 import CaidLogo from "../../components/caid-logo";
 import { FormaUserButton, useFormaAuth } from "../../lib/forma-auth";
-import { type WorkspaceStatusPresentation } from "../../lib/connection-status";
+import {
+  type WorkspaceStatusPresentation,
+  type WorkspaceStatusTone,
+} from "../../lib/connection-status";
 
 export type ChatListItem = {
   chatId: string;
@@ -111,10 +114,17 @@ function formatSidebarDate(value: string | null) {
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+const STATUS_BADGE_TONE_CLASS: Record<WorkspaceStatusTone, string> = {
+  ok: "status-badge-ok",
+  authoring: "status-badge-authoring",
+  delivered: "status-badge-delivered",
+  error: "status-badge-error",
+};
+
 function ApiConnectionStatus({ status }: { status: WorkspaceStatusPresentation }) {
   return (
     <span
-      className={`status-badge ${status.tone === "error" ? "status-badge-error" : "status-badge-ok"} ${
+      className={`status-badge ${STATUS_BADGE_TONE_CLASS[status.tone]} ${
         status.pulse ? "status-badge-pulse" : "status-badge-idle"
       }`}
       role="status"

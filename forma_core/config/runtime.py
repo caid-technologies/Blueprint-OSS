@@ -29,6 +29,7 @@ DEPLOYMENT_MODE_ENV = "FORMA_DEPLOYMENT_MODE"
 DEVELOPMENT_MODE_ENV = "FORMA_DEVELOPMENT_MODE"
 LEGACY_DEVELOPMENT_MODE_ENV = "FORMA_DEV_MODE"
 HOSTED_CHAT_ENABLED_ENV = "FORMA_HOSTED_CHAT_ENABLED"
+AUTHORING_MODE_ENABLED_ENV = "FORMA_AUTHORING_MODE_ENABLED"
 DEPLOYMENT_MODES = {"local", "hosted"}
 BOOLEAN_VALUES = {"true": True, "false": False}
 
@@ -148,6 +149,11 @@ def hosted_chat_enabled() -> bool:
     return env_bool(HOSTED_CHAT_ENABLED_ENV, default=not deployment_mode_enabled())
 
 
+def authoring_mode_enabled() -> bool:
+    """Resolve external OpenCode authoring mode, disabled by default."""
+    return env_bool(AUTHORING_MODE_ENABLED_ENV, default=False)
+
+
 class HostedChatUnavailableError(RuntimeError):
     """Raised when hosted chat is disabled by deployment configuration."""
 
@@ -170,6 +176,7 @@ def deployment_runtime_config(
         "mode": state["deployment_mode"],
         "development_mode": state["development_mode"],
         "hosted_chat_enabled": hosted_chat_enabled(),
+        "authoring_mode_enabled": authoring_mode_enabled(),
         "alpha_generation_gate_active": deployment_enabled and not live_generation_enabled,
         "generation_available": (not deployment_enabled) or live_generation_enabled,
     }
@@ -227,6 +234,7 @@ def generation_unavailable_detail(llm_config: Dict[str, Any]) -> Dict[str, Any]:
 __all__ = [
     "ALPHA_GENERATION_UNAVAILABLE_MESSAGE",
     "AlphaGenerationUnavailableError",
+    "AUTHORING_MODE_ENABLED_ENV",
     "BOOLEAN_VALUES",
     "DEPLOYMENT_MODE_ENV",
     "DEVELOPMENT_MODE_ENV",
@@ -236,6 +244,7 @@ __all__ = [
     "HostedChatUnavailableError",
     "LEGACY_DEVELOPMENT_MODE_ENV",
     "RuntimeConfigurationError",
+    "authoring_mode_enabled",
     "deployment_mode",
     "deployment_mode_enabled",
     "deployment_runtime_config",
