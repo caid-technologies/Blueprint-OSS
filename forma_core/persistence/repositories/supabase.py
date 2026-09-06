@@ -645,6 +645,103 @@ class SupabaseRepository:
             return None
         return _record(rows[0]) if rows else None
 
+    def get_cli_project_delivery(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        idempotency_key: str,
+    ) -> Optional[Any]:
+        rows = (
+            self._client.table("cli_project_deliveries")
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("owner_user_id", owner_user_id)
+            .eq("idempotency_key", idempotency_key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return _record(rows[0]) if rows else None
+
+    def get_cli_project_delivery_by_id(self, delivery_id: str) -> Optional[Any]:
+        rows = (
+            self._client.table("cli_project_deliveries")
+            .select("*")
+            .eq("delivery_id", delivery_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return _record(rows[0]) if rows else None
+
+    def list_cli_project_deliveries(self, owner_user_id: str) -> List[Any]:
+        rows = (
+            self._client.table("cli_project_deliveries")
+            .select("*")
+            .eq("owner_user_id", owner_user_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+        return [_record(row) for row in rows]
+
+    def insert_cli_project_delivery(self, record: Dict[str, Any]) -> Any:
+        rows = self._client.table("cli_project_deliveries").insert(record).execute().data or []
+        return _record(rows[0]) if rows else _record(record)
+
+    def update_cli_project_delivery(
+        self,
+        delivery_id: str,
+        owner_user_id: str,
+        updates: Dict[str, Any],
+    ) -> Optional[Any]:
+        rows = (
+            self._client.table("cli_project_deliveries")
+            .update(updates)
+            .eq("delivery_id", delivery_id)
+            .eq("owner_user_id", owner_user_id)
+            .execute()
+            .data
+            or []
+        )
+        return _record(rows[0]) if rows else None
+
+    def update_cli_project_visibility(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        visibility: str,
+    ) -> Optional[Any]:
+        rows = (
+            self._client.table("cli_projects")
+            .update({"visibility": visibility})
+            .eq("project_id", project_id)
+            .eq("owner_user_id", owner_user_id)
+            .execute()
+            .data
+            or []
+        )
+        return _record(rows[0]) if rows else None
+
+    def record_project_publish_audit(self, record: Dict[str, Any]) -> None:
+        self._client.table("project_publish_audit").insert(record).execute()
+
+    def list_project_publish_audits(self, project_id: str, owner_user_id: str) -> List[Any]:
+        rows = (
+            self._client.table("project_publish_audit")
+            .select("*")
+            .eq("project_id", project_id)
+            .eq("owner_user_id", owner_user_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+        return [_record(row) for row in rows]
+
     def _ensure_canonical_cli_revision(
         self,
         project_record: Dict[str, Any],

@@ -228,6 +228,28 @@ class ProjectArtifactStorage:
         self._validate_size(content)
         return StoredProjectArtifact(project_id, normalized_sha256, normalized_media_type, len(content), content)
 
+    def contains(self, project_id: str, sha256: str) -> bool:
+        """Return whether an object with the declared SHA-256 is already stored."""
+        self._require_enabled()
+        normalized_sha256 = str(sha256 or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized_sha256):
+            raise ValueError("Project artifact storage requires a SHA-256 hash.")
+        key = project_artifact_storage_key(project_id, normalized_sha256)
+        backend = self.config["backend"]
+        if backend == "local":
+            return (Path(self.config["directory"]) / Path(*key.split("/"))).is_file()
+        if backend == "supabase":
+            bucket = self._supabase_bucket()
+            try:
+                return bool(bucket.list(key, {"limit": 1}))
+            except Exception as exc:
+                raise ProjectArtifactStorageError("Project artifact presence check failed.") from exc
+        try:
+            self._s3_client().head_object(Bucket=self.config["bucket"], Key=key)
+            return True
+        except Exception:
+            return False
+
     def delete_project(self, project_id: str) -> int:
         """Delete all objects for a project; used by privacy purge workers."""
         self._require_enabled()

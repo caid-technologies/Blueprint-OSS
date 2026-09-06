@@ -99,6 +99,38 @@ class CloudProjectRevision(BaseModel):
     created_at: str | None = None
 
 
+class DeliveryProjectRef(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    project_id: str
+    revision_id: str
+    revision: int
+    parent_revision_id: str | None = None
+    visibility: str = "private"
+
+
+class DeliveryArtifactStatus(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    path: str | None = None
+    sha256: str | None = None
+    media_type: str | None = None
+    size_bytes: int | None = None
+    status: str = "pending"
+
+
+class DeliveryReceipt(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    delivery_id: str
+    status: str
+    project: DeliveryProjectRef
+    artifacts: list[DeliveryArtifactStatus] = field(default_factory=list)
+    artifact_summary: dict[str, int] = {}
+    created_at: str | None = None
+    completed_at: str | None = None
+
+
 @dataclass(frozen=True)
 class ProjectArtifactDownload:
     """Binary artifact response returned by a cloud project revision."""
@@ -431,6 +463,49 @@ class FormaAPIClient:
         payload = self._request(path, authenticated=True)
         return CloudProjectRevision.model_validate(payload)
 
+    def deliver_project(
+        self,
+        manifest: Mapping[str, Any],
+        *,
+        idempotency_key: str,
+        parent_revision_id: str | None = None,
+        visibility: str | None = None,
+    ) -> DeliveryReceipt:
+        ensure_supported_hardware_ir_version(manifest)
+        body: dict[str, Any] = {
+            "manifest": dict(manifest),
+            "idempotency_key": idempotency_key,
+        }
+        if parent_revision_id is not None:
+            body["parent_revision_id"] = parent_revision_id
+        if visibility is not None:
+            body["visibility"] = visibility
+        payload = self._request(
+            "/cli/projects/deliver",
+            method="POST",
+            payload=body,
+            authenticated=True,
+        )
+        return DeliveryReceipt.model_validate(payload)
+
+    def complete_delivery(self, delivery_id: str) -> DeliveryReceipt:
+        payload = self._request(
+            f"/cli/projects/deliver/{quote(delivery_id, safe='')}/complete",
+            method="POST",
+            payload={},
+            authenticated=True,
+        )
+        return DeliveryReceipt.model_validate(payload)
+
+    def publish_project(self, project_id: str) -> dict[str, Any]:
+        payload = self._request(
+            f"/cli/projects/{quote(project_id, safe='')}/publish",
+            method="POST",
+            payload={},
+            authenticated=True,
+        )
+        return payload if isinstance(payload, dict) else {}
+
     def list_keys(self) -> list[ManagedCredentialMetadata]:
         payload = self._request("/cli/credentials", authenticated=True)
         items = payload.get("items", payload) if isinstance(payload, dict) else payload
@@ -456,6 +531,9 @@ __all__ = [
     "CompatibilityMetadata",
     "CompatibilityResult",
     "CompatibilityStatus",
+    "DeliveryArtifactStatus",
+    "DeliveryProjectRef",
+    "DeliveryReceipt",
     "DeviceAuthorization",
     "DevicePollResult",
     "FormaAPIClient",

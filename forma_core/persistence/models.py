@@ -184,6 +184,8 @@ class DBCliProject(Base):
     workspace_id = Column(String, nullable=True)
     owner_user_id = Column(String, index=True, nullable=False)
     title = Column(String, nullable=False, default="")
+    creation_channel = Column(String, nullable=False, default="cli")
+    visibility = Column(String, nullable=False, default="public")
     current_revision = Column(Integer, nullable=False, default=0)
     current_revision_id = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
@@ -205,6 +207,33 @@ class DBCliProjectRevision(Base):
     parent_revision_id = Column(String, nullable=True)
     manifest_json = Column(JSON, nullable=False)
     created_at = Column(String, index=True, nullable=False)
+
+
+class DBCliProjectDelivery(Base):
+    """Server-side idempotent delivery session for agent/CLI-created projects."""
+
+    __tablename__ = "cli_project_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "project_id",
+            "idempotency_key",
+            name="uq_cli_project_delivery_owner_project_key",
+        ),
+    )
+
+    delivery_id = Column(String, primary_key=True)
+    project_id = Column(String, index=True, nullable=False)
+    owner_user_id = Column(String, index=True, nullable=False)
+    idempotency_key = Column(String, nullable=False)
+    revision_id = Column(String, nullable=False)
+    revision = Column(Integer, nullable=False)
+    parent_revision_id = Column(String, nullable=True)
+    manifest_json = Column(JSON, nullable=False)
+    status = Column(String, index=True, nullable=False, default="pending")
+    receipt_json = Column(JSON, nullable=True)
+    created_at = Column(String, index=True, nullable=False)
+    completed_at = Column(String, nullable=True)
 
 
 class DBCliDeviceAuthorization(Base):
@@ -304,6 +333,19 @@ class DBProjectDeletionAudit(Base):
     status = Column(String, index=True, nullable=False)
     policy_version = Column(String, nullable=False)
     details_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(String, index=True, nullable=False)
+
+
+class DBProjectPublishAudit(Base):
+    """Audit record for an explicit publish (private-to-public) action."""
+
+    __tablename__ = "project_publish_audit"
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, index=True, nullable=False)
+    owner_user_id = Column(String, index=True, nullable=False)
+    acting_user_id = Column(String, index=True, nullable=False)
+    visibility_before = Column(String, nullable=False)
     created_at = Column(String, index=True, nullable=False)
 
 

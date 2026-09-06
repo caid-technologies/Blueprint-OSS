@@ -7,6 +7,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from forma_core.jobs.store import JobMetadataStore
@@ -847,6 +848,164 @@ class PersistenceArchitectureTests(unittest.TestCase):
                 ),
             )
             connection.commit()
+
+
+class CliProjectDeliveryPersistenceTests(unittest.TestCase):
+    def _provider_and_repo(self) -> tuple[Any, Any]:
+        provider = create_sqlite_provider(
+            source="test cli project delivery persistence",
+            url="sqlite:///:memory:",
+            import_legacy_jobs=False,
+        )
+        provider.initialize()
+        return provider, SqlAlchemyRepository(provider.session_factory)
+
+    def test_cli_project_delivery_session_round_trip(self) -> None:
+        _, repo = self._provider_and_repo()
+        record = {
+            "delivery_id": "delivery-a",
+            "project_id": "project-a",
+            "owner_user_id": "user-a",
+            "idempotency_key": "key-a",
+            "revision_id": "rev-a",
+            "revision": 3,
+            "parent_revision_id": "rev-b",
+            "manifest_json": {"project_id": "project-a", "visibility": "private"},
+            "status": "pending",
+            "receipt_json": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "completed_at": None,
+        }
+        created = repo.insert_cli_project_delivery(record)
+        self.assertEqual("delivery-a", created.delivery_id)
+
+        replay = repo.insert_cli_project_delivery(record)
+        self.assertEqual("delivery-a", replay.delivery_id)
+
+        delivery = repo.get_cli_project_delivery("project-a", "user-a", "key-a")
+        self.assertEqual("delivery-a", delivery.delivery_id)
+        self.assertEqual("rev-b", delivery.parent_revision_id)
+
+        by_id = repo.get_cli_project_delivery_by_id("delivery-a")
+        self.assertEqual("project-a", by_id.project_id)
+
+        updated = repo.update_cli_project_delivery(
+            "delivery-a",
+            "user-a",
+            {"status": "complete", "receipt_json": {"delivery_id": "delivery-a", "status": "complete"}, "completed_at": "2026-01-01T00:00:01Z"},
+        )
+        self.assertEqual("complete", updated.status)
+        self.assertEqual({"delivery_id": "delivery-a", "status": "complete"}, updated.receipt_json)
+
+        self.assertEqual(["delivery-a"], [item.delivery_id for item in repo.list_cli_project_deliveries("user-a")])
+        self.assertEqual([], repo.list_cli_project_deliveries("user-b"))
+        self.assertIsNone(repo.get_cli_project_delivery_by_id("missing"))
+
+    def test_project_publish_audit_round_trip(self) -> None:
+        _, repo = self._provider_and_repo()
+        audit = {
+            "id": "audit-1",
+            "project_id": "project-a",
+            "owner_user_id": "user-a",
+            "acting_user_id": "user-a",
+            "visibility_before": "private",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        repo.record_project_publish_audit(audit)
+        audits = repo.list_project_publish_audits("project-a", "user-a")
+        self.assertEqual(["audit-1"], [item.id for item in audits])
+        self.assertEqual("private", audits[0].visibility_before)
+        self.assertEqual([], repo.list_project_publish_audits("project-a", "user-b"))
+
+    def test_database_publish_cli_project_flips_private_identity_and_records_audit(self) -> None:
+        now_iso = "2026-01-01T00:00:00Z"
+        provider = create_sqlite_provider(
+            source="test cli project publish helper",
+            url="sqlite:///:memory:",
+            import_legacy_jobs=False,
+        )
+        provider.initialize()
+        repo = SqlAlchemyRepository(provider.session_factory)
+        repo.insert_cli_project_revision(
+            {
+                "project_id": "project-a",
+                "workspace_id": None,
+                "owner_user_id": "user-a",
+                "creation_channel": "cli",
+                "visibility": "private",
+                "title": "Delivered project",
+                "current_revision": 0,
+                "current_revision_id": None,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            },
+            {
+                "revision_id": "rev-a",
+                "project_id": "project-a",
+                "owner_user_id": "user-a",
+                "revision": 1,
+                "parent_revision_id": None,
+                "manifest_json": {"project_id": "project-a", "visibility": "private"},
+                "created_at": now_iso,
+            },
+            expected_revision_id=None,
+        )
+        with (
+            patch.object(database, "_DATABASE_REPOSITORY", repo),
+            patch.object(database, "invalidate_project_lists"),
+        ):
+            result = database.publish_cli_project("project-a", "user-a", acting_user_id="user-a")
+
+        self.assertTrue(result["published"])
+        self.assertEqual("private", result["visibility_before"])
+        identity = repo.get_project_identity("project-a")
+        self.assertEqual("public", identity["visibility"])
+        cli_project = repo.get_cli_project("project-a", "user-a")
+        self.assertEqual("public", cli_project.visibility)
+        audits = repo.list_project_publish_audits("project-a", "user-a")
+        self.assertEqual(1, len(audits))
+        self.assertEqual("user-a", audits[0].acting_user_id)
+
+        with (
+            patch.object(database, "_DATABASE_REPOSITORY", repo),
+            patch.object(database, "invalidate_project_lists"),
+        ):
+            already = database.publish_cli_project("project-a", "user-a", acting_user_id="user-a")
+
+        self.assertFalse(already["published"])
+        self.assertEqual("public", repo.get_cli_project("project-a", "user-a").visibility)
+        self.assertEqual(1, len(repo.list_project_publish_audits("project-a", "user-a")))
+
+    def test_database_publish_rejects_foreign_owner_and_missing_identity(self) -> None:
+        provider = create_sqlite_provider(
+            source="test cli project publish guards",
+            url="sqlite:///:memory:",
+            import_legacy_jobs=False,
+        )
+        provider.initialize()
+        repo = SqlAlchemyRepository(provider.session_factory)
+        repo.upsert_project_identity(
+            {
+                "project_id": "project-a",
+                "owner_user_id": "user-a",
+                "creation_channel": "cli",
+                "title": "Delivered project",
+                "prompt": "",
+                "chat_id": None,
+                "workspace_id": None,
+                "visibility": "private",
+                "status": "active",
+                "current_revision": 1,
+                "current_revision_id": "rev-a",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        )
+        with patch.object(database, "_DATABASE_REPOSITORY", repo):
+            with self.assertRaisesRegex(ValueError, "owned by another user"):
+                database.publish_cli_project("project-a", "user-b", acting_user_id="user-b")
+            with self.assertRaisesRegex(ValueError, "not found"):
+                database.publish_cli_project("missing-project", "user-a", acting_user_id="user-a")
 
 
 class _SchemaResponse:

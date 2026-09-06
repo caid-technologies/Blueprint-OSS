@@ -149,6 +149,13 @@ class ApplicationRepository(Protocol):
 
     def get_cli_project(self, project_id: str, owner_user_id: str) -> Optional[Any]: ...
 
+    def update_cli_project_visibility(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        visibility: str,
+    ) -> Optional[Any]: ...
+
     def list_cli_projects(self, owner_user_id: str) -> List[Any]: ...
 
     def get_cli_project_revision(
@@ -164,6 +171,30 @@ class ApplicationRepository(Protocol):
         revision_record: Dict[str, Any],
         expected_revision_id: Optional[str],
     ) -> Optional[Any]: ...
+
+    def get_cli_project_delivery(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        idempotency_key: str,
+    ) -> Optional[Any]: ...
+
+    def get_cli_project_delivery_by_id(self, delivery_id: str) -> Optional[Any]: ...
+
+    def list_cli_project_deliveries(self, owner_user_id: str) -> List[Any]: ...
+
+    def insert_cli_project_delivery(self, record: Dict[str, Any]) -> Any: ...
+
+    def update_cli_project_delivery(
+        self,
+        delivery_id: str,
+        owner_user_id: str,
+        updates: Dict[str, Any],
+    ) -> Optional[Any]: ...
+
+    def record_project_publish_audit(self, record: Dict[str, Any]) -> None: ...
+
+    def list_project_publish_audits(self, project_id: str, owner_user_id: str) -> List[Any]: ...
 
     def get_cli_device_authorization(self, device_code_hash: Optional[str] = None, user_code_hash: Optional[str] = None) -> Optional[Any]: ...
 

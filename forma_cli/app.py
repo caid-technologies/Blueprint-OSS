@@ -745,6 +745,130 @@ def cmd_projects_pull(args: argparse.Namespace) -> int:
     return 0
 
 
+def _delivery_idempotency_key(upload_payload: dict[str, Any]) -> str:
+    return f"deliver:{_manifest_digest(upload_payload)}"
+
+
+def cmd_projects_deliver(args: argparse.Namespace) -> int:
+    root = project_root(args.path)
+    manifest = read_project(root)
+    upload_payload, local_artifacts = prepare_project_upload(root, manifest)
+    if not _confirm_push(args, manifest):
+        if args.json:
+            _print_json({"ok": False, "operation": "deliver", "status": "cancelled"})
+        else:
+            print("Deliver cancelled.")
+        return 1
+    linkage = load_linkage(root)
+    idempotency_key = args.key or _delivery_idempotency_key(upload_payload)
+    client = _client(args)
+    delivery = client.deliver_project(
+        upload_payload,
+        idempotency_key=idempotency_key,
+        parent_revision_id=linkage.get("revision_id"),
+        visibility=args.visibility,
+    )
+    if delivery.project.project_id != manifest.project_id:
+        raise LocalProjectError("Cloud delivery returned a different project identity; refusing to update local linkage.")
+    artifact_statuses: list[dict[str, Any]] = []
+    for artifact in local_artifacts:
+        try:
+            content = artifact.source_path.read_bytes()
+        except OSError as exc:
+            raise LocalProjectError(f"Could not read project artifact {artifact.path}: {exc}") from exc
+        if hashlib.sha256(content).hexdigest() != artifact.sha256:
+            raise LocalProjectError(
+                f"Project artifact {artifact.path} changed after validation; refusing to upload it."
+            )
+        try:
+            response = client.upload_project_artifact(
+                delivery.project.project_id,
+                delivery.project.revision_id,
+                artifact.sha256,
+                content,
+                artifact.media_type,
+            )
+        except FormaAPIError as exc:
+            raise LocalProjectError(f"Could not upload project artifact {artifact.path}: {exc}") from exc
+        response_sha256 = str(response.get("sha256") or artifact.sha256).strip().lower()
+        response_media_type = str(response.get("media_type") or artifact.media_type)
+        try:
+            response_media_type = normalize_artifact_media_type(response_media_type)
+        except ValueError as exc:
+            raise LocalProjectError(f"Cloud artifact validation failed for {artifact.path}.") from exc
+        if response_sha256 != artifact.sha256 or response_media_type != artifact.media_type:
+            raise LocalProjectError(f"Cloud artifact validation failed for {artifact.path}.")
+        response_size = response.get("size_bytes")
+        if response_size is not None:
+            try:
+                if int(response_size) != artifact.size_bytes:
+                    raise LocalProjectError(f"Cloud artifact validation failed for {artifact.path}.")
+            except (TypeError, ValueError) as exc:
+                raise LocalProjectError(f"Cloud artifact validation failed for {artifact.path}.") from exc
+        artifact_statuses.append(
+            {
+                "path": artifact.path,
+                "status": str(response.get("status") or "uploaded"),
+                "sha256": artifact.sha256,
+                "media_type": artifact.media_type,
+                "size_bytes": artifact.size_bytes,
+            }
+        )
+    try:
+        completed = client.complete_delivery(delivery.delivery_id)
+    except FormaAPIError as exc:
+        raise LocalProjectError(
+            f"Delivery session {delivery.delivery_id} could not be completed: {exc}"
+        ) from exc
+    if local_artifacts:
+        write_project_manifest(root / "forma-project.json", ProjectManifest.model_validate(upload_payload))
+    update_linkage(
+        root,
+        remote=args.api_url.rstrip("/") if args.api_url else api_url(),
+        remote_project_id=completed.project.project_id,
+        project_id=manifest.project_id,
+        revision_id=completed.project.revision_id,
+        parent_revision_id=completed.project.parent_revision_id,
+        manifest_digest=_manifest_digest(upload_payload),
+        artifact_digests=json.dumps(
+            {artifact.path: artifact.sha256 for artifact in local_artifacts},
+            sort_keys=True,
+        ),
+    )
+    payload = completed.model_dump(mode="json")
+    payload["operation"] = "deliver"
+    payload["idempotency_key"] = idempotency_key
+    payload["artifacts"] = artifact_statuses
+    payload["project_url"] = _project_url(client.base_url or api_url(), completed.project.project_id)
+    if args.json:
+        _print_json(payload)
+    else:
+        print(f"Delivered project {completed.project.project_id} revision {completed.project.revision_id}")
+        print(f"Visibility: {completed.project.visibility}")
+        print(f"Project URL: {payload['project_url']}")
+    return 0
+
+
+def cmd_projects_publish(args: argparse.Namespace) -> int:
+    root = project_root(args.path)
+    linkage = load_linkage(root)
+    project_id = args.project_id or linkage.get("remote_project_id") or linkage.get("project_id")
+    if not project_id:
+        raise LocalProjectError("No remote project is linked. Deliver or push it first, or pass --project-id.")
+    result = _client(args).publish_project(project_id)
+    payload = dict(result)
+    payload["operation"] = "publish"
+    if args.json:
+        _print_json(payload)
+    else:
+        print(f"Project {project_id} is now {result.get('visibility', 'public')}")
+        if result.get("published"):
+            print(f"Published from {result.get('visibility_before')} by explicit action ({result.get('published_at')}).")
+        else:
+            print("Project was already public; no change was recorded.")
+    return 0
+
+
 def _manifest_digest(value: Any) -> str:
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
@@ -944,6 +1068,21 @@ def build_parser() -> argparse.ArgumentParser:
     pull.add_argument("--revision-id")
     pull.add_argument("--json", action="store_true")
     pull.set_defaults(func=cmd_projects_pull)
+    deliver = project_commands.add_parser(
+        "deliver",
+        help="Deliver a private snapshot with an idempotent receipt accepted only after artifacts are verified.",
+    )
+    deliver.add_argument("--path", default=".")
+    deliver.add_argument("--key", help="Idempotency key; defaults to a digest of the delivered manifest.")
+    deliver.add_argument("--visibility", choices=("public", "private"), default=None)
+    deliver.add_argument("--yes", action="store_true", help="Confirm delivery without prompting.")
+    deliver.add_argument("--json", action="store_true")
+    deliver.set_defaults(func=cmd_projects_deliver)
+    publish = project_commands.add_parser("publish", help="Explicitly publish an owned private project.")
+    publish.add_argument("--path", default=".")
+    publish.add_argument("--project-id")
+    publish.add_argument("--json", action="store_true")
+    publish.set_defaults(func=cmd_projects_publish)
 
     keys = subparsers.add_parser("keys", help="Manage local or hosted provider credentials.")
     key_commands = keys.add_subparsers(dest="keys_command", required=True)
