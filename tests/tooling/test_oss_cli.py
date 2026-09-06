@@ -9,12 +9,19 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from forma_cli.app import build_parser, cmd_projects_pull, cmd_projects_push, cmd_render
+from forma_cli.app import build_parser, cmd_projects_deliver, cmd_projects_publish, cmd_projects_pull, cmd_projects_push, cmd_render
 from forma_cli.config import load_linkage
 from forma_cli.credentials import CredentialStore
 from forma_cli.local import LocalProjectError, build_project, import_project, init_project
 from forma_cli.metadata_api import project_metadata
-from forma_cli.sdk import CloudProjectRevision, FormaAPIClient, ProjectArtifactDownload, TokenSet
+from forma_cli.sdk import (
+    CloudProjectRevision,
+    DeliveryProjectRef,
+    DeliveryReceipt,
+    FormaAPIClient,
+    ProjectArtifactDownload,
+    TokenSet,
+)
 from forma_core.database import get_generated_project, init_db, save_generated_project
 from forma_core.workspaces.projects.manifest import ProjectArtifactReference, ProjectManifest, write_project_manifest
 
@@ -447,6 +454,146 @@ class OssCliTests(unittest.TestCase):
                 {"assembly.step": hashlib.sha256(assembly).hexdigest()},
                 json.loads(linkage["artifact_digests"]),
             )
+
+    def test_projects_deliver_records_receipt_and_stable_idempotency_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest = init_project(temp_dir, title="Deliver project")
+            client = FormaAPIClient(
+                base_url="https://api.example.test",
+                credential_store=CredentialStore(keyring_backend=FakeKeyring()),
+            )
+            client.deliver_project = lambda _manifest, *, idempotency_key, parent_revision_id=None, visibility=None: DeliveryReceipt(  # type: ignore[method-assign]
+                delivery_id="delivery-1",
+                status="pending",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    parent_revision_id=None,
+                    visibility=visibility or "private",
+                ),
+                artifacts=[],
+                artifact_summary={"declared": 0, "present": 0},
+            )
+            client.complete_delivery = lambda _delivery_id: DeliveryReceipt(  # type: ignore[method-assign]
+                delivery_id="delivery-1",
+                status="complete",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    parent_revision_id=None,
+                    visibility="private",
+                ),
+                artifacts=[],
+                artifact_summary={"declared": 0, "present": 0},
+                created_at="2026-01-01T00:00:00Z",
+                completed_at="2026-01-01T00:00:00Z",
+            )
+            args = type("Args", (), {"path": temp_dir, "yes": True, "json": True, "api_url": None, "key": None, "visibility": None})()
+            stdout = io.StringIO()
+            with patch("forma_cli.app.FormaAPIClient", return_value=client), redirect_stdout(stdout):
+                self.assertEqual(0, cmd_projects_deliver(args))
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual("deliver", payload["operation"])
+            self.assertEqual("complete", payload["status"])
+            self.assertTrue(payload["idempotency_key"].startswith("deliver:"))
+            self.assertEqual("private", payload["project"]["visibility"])
+            linkage = load_linkage(Path(temp_dir))
+            self.assertEqual("revision-1", linkage["revision_id"])
+
+    def test_projects_deliver_uploads_referenced_artifacts_before_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            manifest = init_project(root, title="Deliver artifacts")
+            assembly = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n"
+            (root / "assembly.step").write_bytes(assembly)
+            source_manifest = ProjectManifest(
+                project_id=manifest.project_id,
+                title="Deliver artifacts",
+                project_ir={
+                    "cad_model": {
+                        "path": str(root / "assembly.step"),
+                        "filename": "assembly.step",
+                    }
+                },
+                artifacts=[ProjectArtifactReference(path="assembly.step", media_type="model/step")],
+            )
+            write_project_manifest(root / "forma-project.json", source_manifest)
+            client = FormaAPIClient(
+                base_url="https://api.example.test",
+                credential_store=CredentialStore(keyring_backend=FakeKeyring()),
+            )
+            uploaded: list[tuple[str, bytes, str]] = []
+            client.deliver_project = lambda _manifest, *, idempotency_key, parent_revision_id=None, visibility=None: DeliveryReceipt(  # type: ignore[method-assign]
+                delivery_id="delivery-1",
+                status="pending",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    parent_revision_id=None,
+                    visibility="private",
+                ),
+                artifacts=[{"path": "assembly.step"}, ],
+                artifact_summary={"declared": 1, "present": 0},
+            )
+            client.upload_project_artifact = lambda _project_id, _revision_id, sha256, content, media_type: (  # type: ignore[method-assign]
+                uploaded.append((sha256, content, media_type))
+                or {
+                    "status": "uploaded",
+                    "sha256": sha256,
+                    "media_type": media_type,
+                    "size_bytes": len(content),
+                }
+            )
+            client.complete_delivery = lambda _delivery_id: DeliveryReceipt(  # type: ignore[method-assign]
+                delivery_id="delivery-1",
+                status="complete",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    parent_revision_id=None,
+                    visibility="private",
+                ),
+                artifacts=[{"path": "assembly.step", "status": "present"}],
+                artifact_summary={"declared": 1, "present": 1},
+            )
+            args = type("Args", (), {"path": temp_dir, "yes": True, "json": True, "api_url": None, "key": None, "visibility": None})()
+            stdout = io.StringIO()
+            with patch("forma_cli.app.FormaAPIClient", return_value=client), redirect_stdout(stdout):
+                self.assertEqual(0, cmd_projects_deliver(args))
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual("uploaded", payload["artifacts"][0]["status"])
+            self.assertEqual(assembly, uploaded[0][1])
+            self.assertEqual("model/step", uploaded[0][2])
+
+    def test_projects_publish_reports_the_explicit_action(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            init_project(temp_dir)
+            client = FormaAPIClient(
+                base_url="https://api.example.test",
+                credential_store=CredentialStore(keyring_backend=FakeKeyring()),
+            )
+            client.publish_project = lambda _project_id: {  # type: ignore[method-assign]
+                "project_id": "project-1",
+                "visibility": "public",
+                "published": True,
+                "visibility_before": "private",
+                "published_at": "2026-01-01T00:00:00Z",
+            }
+            args = type("Args", (), {"path": temp_dir, "project_id": None, "json": True, "api_url": None})()
+            stdout = io.StringIO()
+            with patch("forma_cli.app.FormaAPIClient", return_value=client), redirect_stdout(stdout):
+                self.assertEqual(0, cmd_projects_publish(args))
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual("publish", payload["operation"])
+            self.assertEqual("public", payload["visibility"])
+            self.assertTrue(payload["published"])
 
     def test_projects_pull_restores_files_and_rewrites_cad_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -53,6 +53,8 @@ def migrate_sqlite_schema(engine: Engine, *, import_legacy_jobs: bool = True) ->
         }
         if cli_columns and "creation_channel" not in cli_columns:
             connection.execute(text("ALTER TABLE cli_projects ADD COLUMN creation_channel VARCHAR NOT NULL DEFAULT 'cli'"))
+        if cli_columns and "visibility" not in cli_columns:
+            connection.execute(text("ALTER TABLE cli_projects ADD COLUMN visibility VARCHAR NOT NULL DEFAULT 'public'"))
         identity_columns = {
             row[1]
             for row in connection.exec_driver_sql("PRAGMA table_info(projects)").fetchall()

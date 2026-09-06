@@ -924,6 +924,151 @@ def insert_cli_project_revision(
     }
 
 
+def _cli_delivery_from_record(record: Any) -> Optional[Dict[str, Any]]:
+    if record is None:
+        return None
+    return {
+        "delivery_id": str(record.delivery_id),
+        "project_id": str(record.project_id),
+        "owner_user_id": str(record.owner_user_id),
+        "idempotency_key": str(record.idempotency_key),
+        "revision_id": str(record.revision_id),
+        "revision": int(record.revision),
+        "parent_revision_id": getattr(record, "parent_revision_id", None),
+        "manifest": getattr(record, "manifest_json", {}),
+        "status": str(getattr(record, "status", "pending")),
+        "receipt": getattr(record, "receipt_json", None),
+        "created_at": getattr(record, "created_at", None),
+        "completed_at": getattr(record, "completed_at", None),
+    }
+
+
+def get_cli_project_delivery(
+    project_id: str,
+    owner_user_id: str,
+    idempotency_key: str,
+) -> Optional[Dict[str, Any]]:
+    return _cli_delivery_from_record(
+        _DATABASE_REPOSITORY.get_cli_project_delivery(
+            str(project_id or "").strip(),
+            _normalize_user_id(owner_user_id) or "",
+            str(idempotency_key or "").strip(),
+        )
+    )
+
+
+def get_cli_project_delivery_by_id(delivery_id: str) -> Optional[Dict[str, Any]]:
+    return _cli_delivery_from_record(
+        _DATABASE_REPOSITORY.get_cli_project_delivery_by_id(str(delivery_id or "").strip())
+    )
+
+
+def list_cli_project_deliveries(owner_user_id: str) -> List[Dict[str, Any]]:
+    records = _DATABASE_REPOSITORY.list_cli_project_deliveries(_normalize_user_id(owner_user_id) or "")
+    return [_cli_delivery_from_record(record) for record in records]
+
+
+def insert_cli_project_delivery(record: Dict[str, Any]) -> Dict[str, Any]:
+    saved = _DATABASE_REPOSITORY.insert_cli_project_delivery(record)
+    if saved is None:
+        raise ValueError("Delivery session could not be created.")
+    delivery = _cli_delivery_from_record(saved)
+    if delivery is None:
+        raise ValueError("Delivery session could not be created.")
+    return delivery
+
+
+def update_cli_project_delivery(
+    delivery_id: str,
+    owner_user_id: str,
+    updates: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    return _cli_delivery_from_record(
+        _DATABASE_REPOSITORY.update_cli_project_delivery(
+            str(delivery_id or "").strip(),
+            _normalize_user_id(owner_user_id) or "",
+            updates,
+        )
+    )
+
+
+def publish_cli_project(
+    project_id: str,
+    owner_user_id: str,
+    acting_user_id: str,
+) -> Dict[str, Any]:
+    """Flip an owned private CLI project to public and record the explicit action."""
+    project_id = str(project_id or "").strip()
+    owner = _normalize_user_id(owner_user_id)
+    acting = _normalize_user_id(acting_user_id) or owner
+    if not owner or not project_id:
+        raise ValueError("A project_id and authenticated owner are required.")
+    identity = _DATABASE_REPOSITORY.get_project_identity(project_id)
+    if identity is None:
+        raise ValueError("Project identity not found.")
+    identity_owner = (
+        identity.get("owner_user_id")
+        if isinstance(identity, dict)
+        else getattr(identity, "owner_user_id", None)
+    )
+    if identity_owner and str(identity_owner) != owner:
+        raise ValueError("Project is owned by another user.")
+    current = _normalize_visibility(
+        identity.get("visibility")
+        if isinstance(identity, dict)
+        else getattr(identity, "visibility", None)
+    )
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if current == "public":
+        _DATABASE_REPOSITORY.update_cli_project_visibility(project_id, owner, "public")
+        return {"project_id": project_id, "visibility": "public", "published": False, "already_public": True}
+    _DATABASE_REPOSITORY.upsert_project_identity(
+        {
+            "project_id": project_id,
+            "owner_user_id": owner,
+            "visibility": "public",
+            "updated_at": now,
+        }
+    )
+    _DATABASE_REPOSITORY.update_cli_project_visibility(project_id, owner, "public")
+    _DATABASE_REPOSITORY.record_project_publish_audit(
+        {
+            "id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "owner_user_id": owner,
+            "acting_user_id": acting,
+            "visibility_before": current,
+            "created_at": now,
+        }
+    )
+    invalidate_project_lists()
+    return {
+        "project_id": project_id,
+        "visibility": "public",
+        "published": True,
+        "visibility_before": current,
+        "published_at": now,
+    }
+
+
+def list_project_publish_audits(project_id: str, owner_user_id: str) -> List[Dict[str, Any]]:
+    records = _DATABASE_REPOSITORY.list_project_publish_audits(
+        str(project_id or "").strip(),
+        _normalize_user_id(owner_user_id) or "",
+    )
+    return [
+        {
+            "id": str(record.id),
+            "project_id": str(record.project_id),
+            "owner_user_id": str(record.owner_user_id),
+            "acting_user_id": str(record.acting_user_id),
+            "visibility_before": str(record.visibility_before),
+            "created_at": getattr(record, "created_at", None),
+        }
+        for record in records
+    ]
+
+
 def get_cli_device_authorization(device_code_hash: Optional[str] = None, user_code_hash: Optional[str] = None) -> Optional[Any]:
     return _DATABASE_REPOSITORY.get_cli_device_authorization(device_code_hash, user_code_hash)
 

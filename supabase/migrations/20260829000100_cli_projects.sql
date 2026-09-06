@@ -5,6 +5,8 @@ create table if not exists public.cli_projects (
   workspace_id text,
   owner_user_id text not null,
   title text not null default '',
+  creation_channel text not null default 'cli',
+  visibility text not null default 'public',
   current_revision integer not null default 0 check (current_revision >= 0),
   current_revision_id text,
   created_at text not null,

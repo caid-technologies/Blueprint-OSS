@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -19,12 +20,14 @@ from forma_core.persistence.models import (
     DBProjectChat,
     DBProjectBuild,
     DBProjectDeletionAudit,
+    DBProjectPublishAudit,
     DBProjectRemix,
     DBProjectSave,
     DBProjectWorkflow,
     DBProjectWorkflowTransition,
     DBProjectRevision,
     DBCliProject,
+    DBCliProjectDelivery,
     DBCliProjectRevision,
     DBCliDeviceAuthorization,
     DBCliTokenSession,
@@ -651,6 +654,113 @@ class SqlAlchemyRepository:
                 return revision
         except IntegrityError:
             return None
+
+    def get_cli_project_delivery(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        idempotency_key: str,
+    ) -> Optional[Any]:
+        with self._session() as session:
+            return session.query(DBCliProjectDelivery).filter(
+                DBCliProjectDelivery.project_id == project_id,
+                DBCliProjectDelivery.owner_user_id == owner_user_id,
+                DBCliProjectDelivery.idempotency_key == idempotency_key,
+            ).first()
+
+    def get_cli_project_delivery_by_id(self, delivery_id: str) -> Optional[Any]:
+        with self._session() as session:
+            return session.query(DBCliProjectDelivery).filter(
+                DBCliProjectDelivery.delivery_id == delivery_id
+            ).first()
+
+    def list_cli_project_deliveries(self, owner_user_id: str) -> List[Any]:
+        with self._session() as session:
+            return (
+                session.query(DBCliProjectDelivery)
+                .filter(DBCliProjectDelivery.owner_user_id == owner_user_id)
+                .order_by(DBCliProjectDelivery.created_at.desc())
+                .all()
+            )
+
+    def insert_cli_project_delivery(self, record: Dict[str, Any]) -> Any:
+        try:
+            with self._session() as session, session.begin():
+                delivery = DBCliProjectDelivery(**record)
+                session.add(delivery)
+                session.flush()
+                session.refresh(delivery)
+                session.expunge(delivery)
+                return delivery
+        except IntegrityError:
+            return self.get_cli_project_delivery(
+                record["project_id"],
+                record["owner_user_id"],
+                record["idempotency_key"],
+            )
+
+    def update_cli_project_visibility(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        visibility: str,
+    ) -> Optional[Any]:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            with self._session() as session, session.begin():
+                project = session.query(DBCliProject).filter(
+                    DBCliProject.project_id == project_id,
+                    DBCliProject.owner_user_id == owner_user_id,
+                ).first()
+                if project is None:
+                    return None
+                project.visibility = visibility
+                project.updated_at = now
+                session.flush()
+                session.refresh(project)
+                session.expunge(project)
+                return project
+        except IntegrityError:
+            return None
+
+    def update_cli_project_delivery(
+        self,
+        delivery_id: str,
+        owner_user_id: str,
+        updates: Dict[str, Any],
+    ) -> Optional[Any]:
+        try:
+            with self._session() as session, session.begin():
+                delivery = session.query(DBCliProjectDelivery).filter(
+                    DBCliProjectDelivery.delivery_id == delivery_id,
+                    DBCliProjectDelivery.owner_user_id == owner_user_id,
+                ).first()
+                if delivery is None:
+                    return None
+                for key, value in updates.items():
+                    setattr(delivery, key, value)
+                session.flush()
+                session.refresh(delivery)
+                session.expunge(delivery)
+                return delivery
+        except IntegrityError:
+            return None
+
+    def record_project_publish_audit(self, record: Dict[str, Any]) -> None:
+        with self._session() as session, session.begin():
+            session.add(DBProjectPublishAudit(**record))
+
+    def list_project_publish_audits(self, project_id: str, owner_user_id: str) -> List[Any]:
+        with self._session() as session:
+            return (
+                session.query(DBProjectPublishAudit)
+                .filter(
+                    DBProjectPublishAudit.project_id == project_id,
+                    DBProjectPublishAudit.owner_user_id == owner_user_id,
+                )
+                .order_by(DBProjectPublishAudit.created_at.desc())
+                .all()
+            )
 
     def get_cli_device_authorization(self, device_code_hash: Optional[str] = None, user_code_hash: Optional[str] = None) -> Optional[Any]:
         with self._session() as session:

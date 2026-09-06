@@ -80,8 +80,8 @@ APPLICATION_SCHEMA: Tuple[TableContract, ...] = (
     TableContract(
         "cli_projects",
         (
-            "project_id", "workspace_id", "owner_user_id", "creation_channel", "title", "current_revision",
-            "current_revision_id", "created_at", "updated_at",
+            "project_id", "workspace_id", "owner_user_id", "creation_channel", "title",
+            "current_revision", "current_revision_id", "visibility", "created_at", "updated_at",
         ),
     ),
     TableContract(
@@ -129,6 +129,17 @@ APPLICATION_SCHEMA: Tuple[TableContract, ...] = (
     TableContract(
         "project_deletion_audit",
         ("id", "project_id", "acting_user_id", "action", "status", "policy_version", "details_json", "created_at"),
+    ),
+    TableContract(
+        "project_publish_audit",
+        ("id", "project_id", "owner_user_id", "acting_user_id", "visibility_before", "created_at"),
+    ),
+    TableContract(
+        "cli_project_deliveries",
+        (
+            "delivery_id", "project_id", "owner_user_id", "idempotency_key", "revision_id", "revision",
+            "parent_revision_id", "manifest_json", "status", "receipt_json", "created_at", "completed_at",
+        ),
     ),
     TableContract(
         "project_chats",
