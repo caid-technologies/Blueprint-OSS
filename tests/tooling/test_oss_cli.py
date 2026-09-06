@@ -363,22 +363,39 @@ class OssCliTests(unittest.TestCase):
     def test_projects_push_json_keeps_stdout_machine_readable(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest = init_project(temp_dir, title="Upload project")
-            revision = CloudProjectRevision(
-                revision_id="revision-1",
-                project_id=manifest.project_id,
-                revision=1,
-                manifest=manifest.upload_payload(),
+            delivery_id = "delivery-push-1"
+            pending = DeliveryReceipt(
+                delivery_id=delivery_id,
+                status="pending",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                ),
+            )
+            completed = DeliveryReceipt(
+                delivery_id=delivery_id,
+                status="complete",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    visibility="private",
+                ),
             )
             client = FormaAPIClient(
                 base_url="https://api.example.test",
                 credential_store=CredentialStore(keyring_backend=FakeKeyring()),
             )
-            client.push_project = lambda _manifest, parent_revision_id=None: revision  # type: ignore[method-assign]
+            client.push_project = lambda _manifest, **kwargs: pending  # type: ignore[method-assign]
+            client.complete_delivery = lambda _delivery_id: completed  # type: ignore[method-assign]
             args = type("Args", (), {
                 "path": temp_dir,
                 "yes": True,
                 "json": True,
                 "api_url": None,
+                "key": None,
+                "visibility": None,
             })()
             stdout = io.StringIO()
             stderr = io.StringIO()
@@ -386,7 +403,8 @@ class OssCliTests(unittest.TestCase):
                 self.assertEqual(0, cmd_projects_push(args))
 
             payload = json.loads(stdout.getvalue())
-            self.assertEqual("revision-1", payload["revision_id"])
+            self.assertEqual("revision-1", payload["project"]["revision_id"])
+            self.assertEqual("push", payload["operation"])
             self.assertEqual(
                 f"https://api.example.test/project/{manifest.project_id}",
                 payload["project_url"],
@@ -411,18 +429,33 @@ class OssCliTests(unittest.TestCase):
                 artifacts=[ProjectArtifactReference(path="assembly.step", media_type="model/step")],
             )
             write_project_manifest(root / "forma-project.json", source_manifest)
-            revision = CloudProjectRevision(
-                revision_id="revision-1",
-                project_id=manifest.project_id,
-                revision=1,
-                manifest={},
+            delivery_id = "delivery-push-1"
+            pending = DeliveryReceipt(
+                delivery_id=delivery_id,
+                status="pending",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                ),
+            )
+            completed = DeliveryReceipt(
+                delivery_id=delivery_id,
+                status="complete",
+                project=DeliveryProjectRef(
+                    project_id=manifest.project_id,
+                    revision_id="revision-1",
+                    revision=1,
+                    visibility="private",
+                ),
             )
             client = FormaAPIClient(
                 base_url="https://api.example.test",
                 credential_store=CredentialStore(keyring_backend=FakeKeyring()),
             )
             uploaded: list[tuple[str, bytes, str]] = []
-            client.push_project = lambda _manifest, parent_revision_id=None: revision  # type: ignore[method-assign]
+            client.push_project = lambda _manifest, **kwargs: pending  # type: ignore[method-assign]
+            client.complete_delivery = lambda _delivery_id: completed  # type: ignore[method-assign]
             client.upload_project_artifact = lambda _project_id, _revision_id, sha256, content, media_type: (  # type: ignore[method-assign]
                 uploaded.append((sha256, content, media_type))
                 or {
@@ -432,7 +465,7 @@ class OssCliTests(unittest.TestCase):
                     "size_bytes": len(content),
                 }
             )
-            args = type("Args", (), {"path": temp_dir, "yes": True, "json": True, "api_url": None})()
+            args = type("Args", (), {"path": temp_dir, "yes": True, "json": True, "api_url": None, "key": None, "visibility": None})()
             stdout = io.StringIO()
             with patch("forma_cli.app.FormaAPIClient", return_value=client), redirect_stdout(stdout):
                 self.assertEqual(0, cmd_projects_push(args))

@@ -554,6 +554,10 @@ def _download_parts(download: Any) -> tuple[bytes, str | None, str | None, int |
     )
 
 
+def _push_idempotency_key(upload_payload: dict[str, Any]) -> str:
+    return f"push:{_manifest_digest(upload_payload)}"
+
+
 def cmd_projects_push(args: argparse.Namespace) -> int:
     root = project_root(args.path)
     manifest = read_project(root)
@@ -565,12 +569,15 @@ def cmd_projects_push(args: argparse.Namespace) -> int:
             print("Upload cancelled.")
         return 1
     linkage = load_linkage(root)
+    idempotency_key = args.key or _push_idempotency_key(upload_payload)
     client = _client(args)
-    revision = client.push_project(
+    delivery = client.push_project(
         upload_payload,
+        idempotency_key=idempotency_key,
         parent_revision_id=linkage.get("revision_id"),
+        visibility=args.visibility,
     )
-    if revision.project_id != manifest.project_id:
+    if delivery.project.project_id != manifest.project_id:
         raise LocalProjectError("Cloud push returned a different project identity; refusing to update local linkage.")
     artifact_statuses: list[dict[str, Any]] = []
     for artifact in local_artifacts:
@@ -584,8 +591,8 @@ def cmd_projects_push(args: argparse.Namespace) -> int:
             )
         try:
             response = client.upload_project_artifact(
-                revision.project_id,
-                revision.revision_id,
+                delivery.project.project_id,
+                delivery.project.revision_id,
                 artifact.sha256,
                 content,
                 artifact.media_type,
@@ -616,6 +623,12 @@ def cmd_projects_push(args: argparse.Namespace) -> int:
                 "size_bytes": artifact.size_bytes,
             }
         )
+    try:
+        completed = client.complete_delivery(delivery.delivery_id)
+    except FormaAPIError as exc:
+        raise LocalProjectError(
+            f"Delivery session {delivery.delivery_id} could not be completed: {exc}"
+        ) from exc
     if local_artifacts:
         # Persist the same portable, secret-free shape that was committed remotely.
         write_project_manifest(root / "forma-project.json", ProjectManifest.model_validate(upload_payload))
@@ -623,26 +636,27 @@ def cmd_projects_push(args: argparse.Namespace) -> int:
         root,
         version=1,
         remote=args.api_url.rstrip("/") if args.api_url else api_url(),
-        remote_project_id=revision.project_id,
+        remote_project_id=completed.project.project_id,
         project_id=manifest.project_id,
-        revision_id=revision.revision_id,
-        parent_revision_id=revision.parent_revision_id,
+        revision_id=completed.project.revision_id,
+        parent_revision_id=completed.project.parent_revision_id,
         manifest_digest=_manifest_digest(upload_payload),
         artifact_digests=json.dumps(
             {artifact.path: artifact.sha256 for artifact in local_artifacts},
             sort_keys=True,
         ),
     )
-    payload = revision.model_dump(mode="json")
+    payload = completed.model_dump(mode="json")
     payload["operation"] = "push"
+    payload["idempotency_key"] = idempotency_key
     payload["artifacts"] = artifact_statuses
     payload["artifact_summary"] = _artifact_summary(artifact_statuses)
-    payload["project_url"] = _project_url(client.base_url or api_url(), revision.project_id)
+    payload["project_url"] = _project_url(client.base_url or api_url(), completed.project.project_id)
     if args.json:
         _print_json(payload)
     else:
-        print(f"Uploaded private project {revision.project_id} revision {revision.revision_id}")
-        print(f"Uploaded {len(artifact_statuses)} project artifact(s)")
+        print(f"Delivered project {completed.project.project_id} revision {completed.project.revision_id}")
+        print(f"Visibility: {completed.project.visibility}")
         print(f"Project URL: {payload['project_url']}")
     return 0
 
@@ -1059,6 +1073,8 @@ def build_parser() -> argparse.ArgumentParser:
     projects_list.set_defaults(func=cmd_projects_list)
     push = project_commands.add_parser("push", help="Upload the canonical manifest and referenced artifacts explicitly.")
     push.add_argument("--path", default=".")
+    push.add_argument("--key", help="Idempotency key; defaults to a digest of the pushed manifest.")
+    push.add_argument("--visibility", choices=("public", "private"), default=None)
     push.add_argument("--yes", action="store_true", help="Confirm upload without prompting.")
     push.add_argument("--json", action="store_true")
     push.set_defaults(func=cmd_projects_push)
