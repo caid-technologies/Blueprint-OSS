@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -47,6 +48,8 @@ router = APIRouter(prefix="/cli/projects", tags=["cli"])
 class ProjectPushRequest(BaseModel):
     manifest: dict[str, Any]
     parent_revision_id: str | None = Field(default=None, max_length=200)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+    visibility: str | None = Field(default=None)
 
 
 class ProjectDeliverRequest(BaseModel):
@@ -84,6 +87,11 @@ def _delivery_visibility(value: str | None) -> str:
             detail="deliver visibility must be public or private.",
         )
     return normalized or "private"
+
+
+def _push_idempotency_key(manifest: dict[str, Any]) -> str:
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"push:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def _artifact_declaration(artifact: dict[str, Any]) -> dict[str, Any]:
@@ -151,13 +159,21 @@ async def push_cli_project(
     user: UserContext = Depends(require_user_context),
 ) -> dict[str, Any]:
     owner = _owner(user)
+    manifest_document = dict(request.manifest or {})
+    if "owner_user_id" in manifest_document or "owner" in manifest_document:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project ownership is derived from the authenticated user and cannot be supplied.",
+        )
+    project_id = str(manifest_document.get("project_id") or "").strip()
     try:
         compatibility = hosted_compatibility_metadata()
         ensure_supported_hardware_ir_version(
-            request.manifest,
+            manifest_document,
             supported_versions=compatibility.supported_hardware_ir_versions,
         )
-        manifest = ProjectManifest.from_document(request.manifest)
+        manifest_document["visibility"] = _delivery_visibility(request.visibility)
+        manifest = ProjectManifest.from_document(manifest_document)
         payload = manifest.upload_payload()
         payload["artifacts"] = validate_artifact_references(payload.get("artifacts"), require_integrity=True)
         if payload["artifacts"] and not ProjectArtifactStorage().config.get("enabled"):
@@ -165,16 +181,6 @@ async def push_cli_project(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="CLI project artifact storage is not configured.",
             )
-        return insert_cli_project_revision(
-            payload,
-            owner,
-            expected_revision_id=request.parent_revision_id,
-        )
-    except CliProjectConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_revision_conflict_detail(str(request.manifest.get("project_id") or "").strip(), owner, exc),
-        ) from exc
     except UnsupportedHardwareIRVersion as exc:
         raise HTTPException(
             status_code=status.HTTP_426_UPGRADE_REQUIRED,
@@ -186,6 +192,40 @@ async def push_cli_project(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    idempotency_key = request.idempotency_key or _push_idempotency_key(manifest_document)
+    existing = get_cli_project_delivery(project_id, owner, idempotency_key)
+    if existing is not None:
+        return _pending_delivery_response(existing)
+
+    try:
+        saved = insert_cli_project_revision(
+            payload,
+            owner,
+            expected_revision_id=request.parent_revision_id,
+        )
+    except CliProjectConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_revision_conflict_detail(project_id, owner, exc),
+        ) from exc
+
+    record = {
+        "delivery_id": str(uuid.uuid4()),
+        "project_id": saved["project_id"],
+        "owner_user_id": owner,
+        "idempotency_key": idempotency_key,
+        "revision_id": saved["revision_id"],
+        "revision": saved["revision"],
+        "parent_revision_id": saved["parent_revision_id"],
+        "manifest_json": payload,
+        "status": "pending",
+        "receipt_json": None,
+        "created_at": saved["created_at"],
+        "completed_at": None,
+    }
+    delivery = insert_cli_project_delivery(record)
+    return _pending_delivery_response(delivery)
 
 
 @router.post("/deliver")

@@ -412,15 +412,24 @@ class FormaAPIClient:
         manifest: Mapping[str, Any],
         *,
         parent_revision_id: str | None = None,
-    ) -> CloudProjectRevision:
+        idempotency_key: str | None = None,
+        visibility: str | None = None,
+    ) -> DeliveryReceipt:
         ensure_supported_hardware_ir_version(manifest)
+        body: dict[str, Any] = {"manifest": dict(manifest)}
+        if parent_revision_id is not None:
+            body["parent_revision_id"] = parent_revision_id
+        if idempotency_key is not None:
+            body["idempotency_key"] = idempotency_key
+        if visibility is not None:
+            body["visibility"] = visibility
         payload = self._request(
             "/cli/projects/push",
             method="POST",
-            payload={"manifest": dict(manifest), "parent_revision_id": parent_revision_id},
+            payload=body,
             authenticated=True,
         )
-        return CloudProjectRevision.model_validate(payload)
+        return DeliveryReceipt.model_validate(payload)
 
     def upload_project_artifact(
         self,
