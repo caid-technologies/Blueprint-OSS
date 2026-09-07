@@ -154,7 +154,9 @@ The OpenCode execution worker runs as a restricted Windows service named
 origin and must not be published through Cloudflare Tunnel. Cloud Forma remains
 authoritative for browser traffic, accepted projects, revisions, and display.
 
-The worker uses local execution mode for authoring, compilation, validation, and
+Use `FORMA_DEPLOYMENT_MODE=local` for the worker and keep local execution state
+separate from cloud production persistence. The worker uses local execution mode
+for authoring, compilation, validation, and
 resume state, then sends accepted snapshots outbound through the authenticated
 CLI delivery flow. Host service provisioning, account creation, ACLs, and worker
 environment values belong to `caid-technologies/local-server-config`; keep

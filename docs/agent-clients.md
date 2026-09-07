@@ -5,29 +5,18 @@ Forma supports these clients through two portable surfaces:
 - A shared Agent Skill at `.agents/skills/forma-hardware/SKILL.md`.
 - An MCP Streamable HTTP endpoint at `http://127.0.0.1:8000/mcp` (or `/api/mcp` when the deployment adds an `/api` prefix).
 
-## Ownership boundary
+## Cloud and local worker boundary
 
-This is the canonical ownership statement shared with the OpenCode extension
-repository (`caid-technologies/local-server-config`).
+Cloud Forma remains the public browser API, chat/persistence authority, and project
+viewer. A Mini-PC may run the same backend code as a local execution worker for
+OpenCode-owned conversations, compilation, deterministic validation, and generation
+when explicitly configured. The worker delivers accepted snapshots and revisions
+back to cloud Forma through authenticated outbound HTTPS/CLI delivery.
 
-- **The host agent owns the conversation and the working project state.** It
-  runs clarify → plan → author → compile → repair → iterate → validate →
-  deliver. The agent writes the Hardware IR with its own model and keeps that
-  working state in its own workspace.
-- **Forma owns accepted snapshots, deterministic validation, persistence, and
-  display.** Forma receives, stores, and shows delivered results as project
-  revisions. It does not run a parallel authoring agent.
-- **Deterministic validation and compiler tools are utilities, not ownership.**
-  `forma.compile_project` and `forma.validate_circuit` normalize and check what
-  the agent authored; calling them does not transfer authoring ownership back to
-  Forma.
-- **Working state lives with the agent; delivered state lives in Forma
-  revisions.** The undelivered draft belongs to the agent's workspace; delivering
-  publishes an accepted snapshot into Forma.
-
-Both repositories must state this same boundary. When in doubt, the visible
-component identifier (OpenCode conversation, Forma project/revision) tells you
-which side owns it.
+The local worker is not a second hosted Forma deployment. Do not point the Vercel
+browser API at it, copy production Supabase/Clerk/Redis state to it, or publish its
+loopback MCP/API port through a tunnel for normal operation. A narrowly scoped
+remote worker-control endpoint would require separate security review.
 
 Start the backend in local authentication mode:
 
@@ -116,7 +105,7 @@ Verify it with:
 opencode mcp list
 ```
 
-## Protected deployments
+## Protected cloud deployments
 
 The MCP route accepts either a Clerk administrator session or the dedicated `FORMA_MCP_API_KEY`. The API key must contain at least 32 characters. Pass the selected credential as an `Authorization: Bearer ...` header and keep it in an environment variable rather than committing it.
 
