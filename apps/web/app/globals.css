@@ -942,6 +942,14 @@ html:is([data-theme="light"], [data-theme="arctic"], [data-theme="solarized-dark
   color: rgb(var(--forma-green-rgb));
 }
 
+html:is([data-theme="light"], [data-theme="arctic"], [data-theme="solarized-dark"]) .status-badge-authoring {
+  color: rgb(var(--forma-cyan-rgb));
+}
+
+html:is([data-theme="light"], [data-theme="arctic"], [data-theme="solarized-dark"]) .status-badge-delivered {
+  color: rgb(var(--forma-violet-rgb));
+}
+
 html:is([data-theme="light"], [data-theme="arctic"], [data-theme="solarized-dark"]) .status-badge-error {
   color: rgb(var(--forma-red-rgb));
 }
@@ -1147,6 +1155,14 @@ html:is([data-theme="light"], [data-theme="arctic"], [data-theme="solarized-dark
 
 .status-badge-ok {
   color: #34d399;
+}
+
+.status-badge-authoring {
+  color: #22d3ee;
+}
+
+.status-badge-delivered {
+  color: #a78bfa;
 }
 
 .status-badge-error {

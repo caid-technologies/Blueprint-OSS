@@ -18,7 +18,7 @@ import {
 
 import { shouldOfferFailedBuildRetry } from "../../lib/conversation-build-state";
 import ConversationMessageList, { type ConversationMessage } from "./conversation-message-list";
-import HostedChatMaintenance from "./hosted-chat-maintenance";
+import HostedChatMaintenance, { AuthoringModeBanner } from "./hosted-chat-maintenance";
 import useChatAutoScroll from "./use-chat-auto-scroll";
 
 type HomeChatViewProps = {
@@ -55,6 +55,7 @@ type HomeChatViewProps = {
   onImageChange: ChangeEventHandler<HTMLInputElement>;
   onImagePaste: ClipboardEventHandler<HTMLTextAreaElement>;
   readOnly: boolean;
+  authoringActive?: boolean;
 };
 
 export default function HomeChatView({
@@ -91,6 +92,7 @@ export default function HomeChatView({
   onImageChange,
   onImagePaste,
   readOnly,
+  authoringActive = false,
 }: HomeChatViewProps) {
   const { containerRef, endRef, handleScroll } = useChatAutoScroll(conversationKey, messages);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -131,9 +133,9 @@ export default function HomeChatView({
           </p>
         </div>
       )}
-      {readOnly && !started && (
+      {(readOnly || authoringActive) && !started && (
         <div className="mx-auto w-full max-w-2xl px-3 sm:px-4 md:px-0">
-          <HostedChatMaintenance />
+          {authoringActive ? <AuthoringModeBanner /> : <HostedChatMaintenance />}
         </div>
       )}
 
@@ -156,6 +158,7 @@ export default function HomeChatView({
             className="min-h-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-3 pb-5 pt-16 sm:px-4 sm:pb-6 md:pt-5"
           >
             {readOnly && <HostedChatMaintenance compact />}
+            {authoringActive && <AuthoringModeBanner compact />}
             <ConversationMessageList
               messages={messages}
               renderPipelineProgress={renderPipelineProgress}

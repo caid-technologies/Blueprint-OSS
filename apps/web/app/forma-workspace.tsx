@@ -12,7 +12,7 @@ import {
 } from "../lib/active-llms";
 import { buildProjectDocsMarkdown, docsExportFilename } from "../lib/docs-export";
 import { normalizeContextSuggestions } from "../lib/context-suggestions";
-import { usableRuntimeLlmOptions, webConfig, type RuntimeConfigContract } from "../lib/config";
+import { authoringModeEnabled, usableRuntimeLlmOptions, webConfig, type RuntimeConfigContract } from "../lib/config";
 import { calculateProjectCostMetrics, resolveProjectComponentInstances } from "../lib/project-cost-metrics";
 import { useFormaAuth } from "../lib/forma-auth";
 import {
@@ -62,6 +62,9 @@ import ConversationMessageList, {
   type ConversationMessage,
 } from "./forma-workspace/conversation-message-list";
 import HostedChatMaintenance, {
+  AUTHORING_MODE_ACTIVE_MESSAGE,
+  AUTHORING_MODE_HANDOFF_MESSAGE,
+  AuthoringModeBanner,
   HOSTED_CHAT_MAINTENANCE_MESSAGE,
 } from "./forma-workspace/hosted-chat-maintenance";
 import useChatAutoScroll from "./forma-workspace/use-chat-auto-scroll";
@@ -155,6 +158,8 @@ const PIPELINE_STALE_AFTER_MS = WORKSPACE_STATUS_STALE_AFTER_MS;
 const RECOVERY_JOB_BATCH_SIZE = 3;
 const RECOVERY_JOB_MAX_BACKOFF_MS = 60000;
 const LOG_POLL_INTERVAL_MS = 5000;
+const AUTHORING_DELIVERY_POLL_MS = 5000;
+const AUTHORING_DELIVERED_SIGNAL_MS = 8000;
 const CHAT_THREAD_STORAGE_PREFIX = "forma.chat.";
 const CHAT_INDEX_STORAGE_KEY = "forma.chatIndex";
 const PINNED_CHATS_STORAGE_KEY = "forma.pinnedChats";
@@ -211,7 +216,7 @@ type ChatMessage = {
   id: string;
   role: "assistant" | "user" | "system";
   content: string;
-  status?: "idle" | "loading" | "success" | "error" | "cancelled";
+  status?: "idle" | "loading" | "success" | "error" | "cancelled" | "handed-off";
   timestamp: string;
   projectId?: string | null;
   pipelineProgress?: AgentPipelineProgress | null;
@@ -1763,6 +1768,7 @@ export function FormaWorkspace({
   );
   const [authSecurityError, setAuthSecurityError] = useState(false);
   const [statusClockMs, setStatusClockMs] = useState(() => Date.now());
+  const [deliveredSignal, setDeliveredSignal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedImageSource, setSelectedImageSource] = useState<"upload" | "clipboard">("upload");
   const [generationInputNotice, setGenerationInputNotice] = useState<string | null>(null);
@@ -1787,6 +1793,7 @@ export function FormaWorkspace({
     imageRequired: false,
   });
   const [formaDevMode, setFormaDevMode] = useState(false);
+  const [authoringMode, setAuthoringMode] = useState(false);
   const [generateProductImage, setGenerateProductImage] = useState(false);
   const [generationWorkflow, setGenerationWorkflow] = useState(DEFAULT_WORKFLOW_ID);
   const [generationWorkflows, setGenerationWorkflows] = useState<GenerationWorkflowOption[]>(defaultGenerationWorkflows);
@@ -1927,6 +1934,12 @@ export function FormaWorkspace({
       ? generationInputValidation.message
       : null);
   const hostedChatReadOnly = !hostedChatEnabled;
+  const chatReadOnly = hostedChatReadOnly || authoringMode;
+  const chatUnavailableReason = hostedChatReadOnly
+    ? HOSTED_CHAT_MAINTENANCE_MESSAGE
+    : authoringMode
+      ? AUTHORING_MODE_ACTIVE_MESSAGE
+      : undefined;
   const requireHostedChatEnabled = () => {
     if (hostedChatEnabled) return true;
     setGenerationInputNotice(HOSTED_CHAT_MAINTENANCE_MESSAGE);
@@ -2500,9 +2513,11 @@ export function FormaWorkspace({
             lastEventAt: lastEvent?.observed_at || progress?.uiUpdatedAt || null,
           }
         : null,
+      authoring: authoringMode,
+      delivered: deliveredSignal,
       nowMs: statusClockMs,
     });
-  }, [authSecurityError, latestAgentOperation, serverStatus, statusClockMs]);
+  }, [authSecurityError, authoringMode, deliveredSignal, latestAgentOperation, serverStatus, statusClockMs]);
 
 
   const persistChatThread = (chatId: string | null, messages: ChatMessage[], explicitTitle?: string | null) => {
@@ -2825,6 +2840,7 @@ export function FormaWorkspace({
       if (typeof config.deployment?.hosted_chat_enabled === "boolean") {
         setHostedChatEnabled(config.deployment.hosted_chat_enabled);
       }
+      setAuthoringMode(authoringModeEnabled(config));
       setFormaDevMode(config.forma_dev_mode === true);
       const activeLlms = usableRuntimeLlmOptions(config);
       const selectedLlm = config.generation.selected_llm;
@@ -3739,6 +3755,10 @@ export function FormaWorkspace({
 
   const submitGatherContext = async (answer?: string) => {
     if (!requireHostedChatEnabled()) return;
+    if (authoringMode) {
+      setGenerationInputNotice(AUTHORING_MODE_ACTIVE_MESSAGE);
+      return;
+    }
     if (contextSubmitting || activeGenerationRef.current) return;
     if (!(await requireSignedInForGeneration())) return;
 
@@ -3895,6 +3915,10 @@ export function FormaWorkspace({
 
   const handleBuildNow = async () => {
     if (!requireHostedChatEnabled()) return;
+    if (authoringMode) {
+      setGenerationInputNotice(AUTHORING_MODE_ACTIVE_MESSAGE);
+      return;
+    }
     if (contextBuildStarting || contextSubmitting || activeGenerationRef.current) return;
     const requestChatId = activeChatId;
     const availableMessages = requestChatId
@@ -4373,6 +4397,29 @@ export function FormaWorkspace({
   const handleProjectChatGenerate = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!requireHostedChatEnabled()) return;
+    if (authoringMode) {
+      const handoffProjectId = currentProjectId;
+      const handoffMessage = projectChatInput.trim();
+      if (!handoffProjectId || !projectIR || !handoffMessage) return;
+      const sourceChatId = currentProjectChatId || activeChatId || newBuildChatId();
+      setActiveChatId(sourceChatId);
+      appendThreadMessage(sourceChatId, {
+        role: "user",
+        content: handoffMessage,
+        status: "idle",
+        projectId: handoffProjectId,
+      });
+      appendThreadMessage(sourceChatId, {
+        role: "assistant",
+        content: AUTHORING_MODE_HANDOFF_MESSAGE,
+        status: "handed-off",
+        projectId: handoffProjectId,
+      });
+      setProjectChatInput("");
+      setGenerationInputNotice(null);
+      checkServerStatus();
+      return;
+    }
     if (activeGenerationRef.current) return;
     if (!(await requireSignedInForGeneration())) return;
     if (!currentUserOwnsProject) {
@@ -5070,7 +5117,7 @@ export function FormaWorkspace({
       goHome();
     }
   };
-  const newChatDisabled = hostedChatReadOnly || (homeView === "chat" && !routedProjectId && !activeSidebarChatStarted);
+  const newChatDisabled = chatReadOnly || (homeView === "chat" && !routedProjectId && !activeSidebarChatStarted);
   const homeChromeRef = useRef<HTMLDivElement>(null);
   const { headerAway: homeHeaderAway, bindCapture: bindHomeChromeScroll } = useChromeHeaderScroll(
     `${homeView}:${activeChatId || ""}:${activeSidebarChatStarted ? "started" : "new"}`
@@ -5199,6 +5246,63 @@ export function FormaWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routedProjectId, currentUserOwnsProject, currentProjectId, currentProjectChatMessages.length, projectIR]);
 
+  const deliverySignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!authoringMode || !currentProjectId) {
+      setDeliveredSignal(false);
+      return;
+    }
+    const token = currentProjectId;
+    let cancelled = false;
+    let pending = false;
+    deliverySignatureRef.current = null;
+
+    const signatureOf = (record: Record<string, unknown>) => {
+      const updatedAt = typeof record?.updated_at === "string" ? record.updated_at : "";
+      const contentUpdatedAt = typeof record?.content_updated_at === "string" ? record.content_updated_at : "";
+      return `${contentUpdatedAt || updatedAt}`;
+    };
+
+    const poll = async () => {
+      if (cancelled || pending) return;
+      pending = true;
+      try {
+        const response = await fetch(`${API_URL}/projects/${encodeURIComponent(token)}`, {
+          cache: "no-store",
+          headers: await optionalAuthHeaders(),
+        });
+        if (cancelled) return;
+        if (!response.ok) return;
+        const data = await response.json();
+        const signature = signatureOf(data);
+        if (!deliverySignatureRef.current) {
+          deliverySignatureRef.current = signature;
+          return;
+        }
+        if (signature && signature !== deliverySignatureRef.current) {
+          deliverySignatureRef.current = signature;
+          refreshProjectAndChatLists();
+          setDeliveredSignal(true);
+          window.setTimeout(() => {
+            if (!cancelled) setDeliveredSignal(false);
+          }, AUTHORING_DELIVERED_SIGNAL_MS);
+        }
+      } catch {
+        // Transient polling errors must not clear the tracked delivery signature.
+      } finally {
+        pending = false;
+      }
+    };
+
+    void poll();
+    const intervalId = window.setInterval(poll, AUTHORING_DELIVERY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshProjectAndChatLists is intentionally excluded for parity with the other polling effects.
+  }, [authoringMode, currentProjectId, optionalAuthHeaders]);
+
   const implicitChatRouteTransition: ChatRouteTransition | null = routedChatId && (
     activeChatId !== routedChatId ||
     !chatIndexLoaded ||
@@ -5251,7 +5355,7 @@ export function FormaWorkspace({
             activeChatId={visibleChatRouteTransition.chatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5274,7 +5378,7 @@ export function FormaWorkspace({
             activeChatId={visibleChatRouteTransition.chatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5325,7 +5429,7 @@ export function FormaWorkspace({
             activeChatId={null}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5348,7 +5452,7 @@ export function FormaWorkspace({
             activeChatId={null}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5401,7 +5505,7 @@ export function FormaWorkspace({
             activeChatId={activeChatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5424,7 +5528,7 @@ export function FormaWorkspace({
             activeChatId={activeChatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
-            newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+            newChatDisabledReason={chatUnavailableReason}
             readOnly={hostedChatReadOnly}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
@@ -5591,6 +5695,7 @@ export function FormaWorkspace({
             <HomeChatView
               started={activeSidebarChatStarted}
               readOnly={hostedChatReadOnly}
+              authoringActive={authoringMode}
               conversationKey={activeChatId || "new-chat"}
               workspaceTitle={
                 activeSidebarChatStarted ? (
@@ -5708,7 +5813,7 @@ export function FormaWorkspace({
           activeChatId={activeSidebarChatId}
           onNewChat={startNewProjectChat}
           newChatDisabled={newChatDisabled}
-          newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+          newChatDisabledReason={chatUnavailableReason}
           readOnly={hostedChatReadOnly}
           onOpenChat={openChatItem}
           onRenameChat={renameSidebarChat}
@@ -5731,7 +5836,7 @@ export function FormaWorkspace({
           activeChatId={activeSidebarChatId}
           onNewChat={startNewProjectChat}
           newChatDisabled={newChatDisabled}
-          newChatDisabledReason={hostedChatReadOnly ? HOSTED_CHAT_MAINTENANCE_MESSAGE : undefined}
+          newChatDisabledReason={chatUnavailableReason}
           readOnly={hostedChatReadOnly}
           onOpenChat={openChatItem}
           onRenameChat={renameSidebarChat}
@@ -5791,6 +5896,7 @@ export function FormaWorkspace({
                 }}
                 canChat={hostedChatEnabled && currentUserOwnsProject}
                 readOnly={hostedChatReadOnly}
+                authoringActive={authoringMode}
                 namespaceTabs={visibleWorkspaceTabs}
                 activeNamespace={activeWorkspaceTab.id}
                 activeNamespaceLabel={activeWorkspaceTab.label}
@@ -7153,6 +7259,7 @@ function ChatWorkspace({
   onRetryFailedBuild,
   canChat,
   readOnly,
+  authoringActive = false,
   namespaceTabs,
   activeNamespace,
   activeNamespaceLabel,
@@ -7178,6 +7285,7 @@ function ChatWorkspace({
   onRetryFailedBuild: () => void;
   canChat: boolean;
   readOnly: boolean;
+  authoringActive?: boolean;
   namespaceTabs: typeof workspaceTabs;
   activeNamespace: string;
   activeNamespaceLabel: string;
@@ -7215,7 +7323,13 @@ function ChatWorkspace({
           <div className="flex min-w-0 items-center gap-2">
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[rgb(var(--forma-green-rgb)/0.12)] px-2 py-0.5 text-[10px] font-medium text-[rgb(var(--forma-green-rgb))]">
               {chatAvailable ? <MessageSquare className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-              {chatAvailable ? "Project chat" : readOnly ? "Read-only during maintenance" : "Read-only project"}
+              {authoringActive
+                ? "OpenCode authoring"
+                : chatAvailable
+                  ? "Project chat"
+                  : readOnly
+                    ? "Read-only during maintenance"
+                    : "Read-only project"}
             </span>
             <EditableWorkspaceTitle
               value={projectTitle}
@@ -7237,6 +7351,7 @@ function ChatWorkspace({
             >
               <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-3">
                 {readOnly && <HostedChatMaintenance compact />}
+                {authoringActive && <AuthoringModeBanner compact />}
                 <ConversationMessageList
                   messages={messages}
                   renderPipelineProgress={renderPipelineProgress}

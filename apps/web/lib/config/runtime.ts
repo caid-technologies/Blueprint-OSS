@@ -41,6 +41,7 @@ export type RuntimeConfigContract = {
   };
   deployment?: {
     hosted_chat_enabled?: boolean;
+    authoring_mode_enabled?: boolean;
   };
   video?: {
     generation?: { configured?: boolean; reason?: string | null };
@@ -52,4 +53,8 @@ export function usableRuntimeLlmOptions(contract: RuntimeConfigContract): Genera
   return Array.isArray(contract.generation.llm_options)
     ? contract.generation.llm_options.filter((option) => option.configured !== false && option.provider && option.model)
     : [];
+}
+
+export function authoringModeEnabled(contract: RuntimeConfigContract): boolean {
+  return contract.deployment?.authoring_mode_enabled === true;
 }

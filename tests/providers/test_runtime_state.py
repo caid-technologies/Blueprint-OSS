@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from forma_core.config.runtime import (
     RuntimeConfigurationError,
+    authoring_mode_enabled,
     deployment_mode,
     development_mode_enabled,
     hosted_chat_enabled,
@@ -77,6 +78,14 @@ class RuntimeStateTests(unittest.TestCase):
             clear=True,
         ):
             self.assertTrue(hosted_chat_enabled())
+
+    def test_authoring_mode_defaults_to_disabled(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(authoring_mode_enabled())
+
+    def test_authoring_mode_flag_can_be_enabled_explicitly(self) -> None:
+        with patch.dict(os.environ, {"FORMA_AUTHORING_MODE_ENABLED": "true"}, clear=True):
+            self.assertTrue(authoring_mode_enabled())
 
 
 if __name__ == "__main__":
