@@ -147,6 +147,21 @@ To make backend logs visible in the local frontend LOGS tab when running uvicorn
 BACKEND_LOG_FILE=.logs/backend-dev.log uvicorn apps.api.main:app --reload --port 8000
 ```
 
+## Self-hosted tunnel origin
+
+The planned self-hosted production backend runs as a dedicated Windows service
+named `FormaBackend`, under a restricted non-interactive local account. It must
+bind only to `127.0.0.1:8000`; Cloudflare Tunnel is the only intended public
+ingress path. The service must use `FORMA_DEPLOYMENT_MODE=hosted`, production
+Supabase/Redis configuration, and must not set `FORMA_DEVELOPMENT_MODE=true`.
+
+Host service provisioning, account creation, ACLs, and tunnel configuration belong
+to `caid-technologies/local-server-config`. Keep passwords, tunnel tokens, and
+runtime environment values out of this repository. Verify the local backend before
+pointing tunnel ingress at it, then test `/`, `/api/runtime/config`, `/api/mcp`,
+A2A, WebSocket, request-body, and streamed-response paths without introducing an
+additional `/api` prefix.
+
 Run generation directly through the sole Forma Core CLI with `--llm provider/model`:
 
 ```bash
