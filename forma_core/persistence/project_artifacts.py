@@ -240,10 +240,18 @@ class ProjectArtifactStorage:
             return (Path(self.config["directory"]) / Path(*key.split("/"))).is_file()
         if backend == "supabase":
             bucket = self._supabase_bucket()
+            folder, _, name = key.rpartition("/")
             try:
-                return bool(bucket.list(key, {"limit": 1}))
+                # Supabase storage treats a list prefix as a folder, so listing
+                # the full object key would only return its children. List the
+                # containing folder and match the object name instead.
+                items = bucket.list(folder, {"limit": 1000, "search": name}) or []
             except Exception as exc:
                 raise ProjectArtifactStorageError("Project artifact presence check failed.") from exc
+            return any(
+                isinstance(item, dict) and item.get("name") == name
+                for item in items
+            )
         try:
             self._s3_client().head_object(Bucket=self.config["bucket"], Key=key)
             return True

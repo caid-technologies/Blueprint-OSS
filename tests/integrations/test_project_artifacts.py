@@ -43,6 +43,55 @@ class ProjectArtifactStorageTests(unittest.TestCase):
                 storage.get("project-a", sha256, "application/octet-stream")
             self.assertEqual(0, storage.delete_project("project-a"))
 
+    def test_supabase_contains_matches_object_under_folder_listing(self) -> None:
+        content = b"supabase-backed artifact"
+        sha256 = hashlib.sha256(content).hexdigest()
+        key = project_artifact_storage_key("project-sb", sha256)
+        folder, _, name = key.rpartition("/")
+
+        class FakeSupabaseBucket:
+            """Reproduce the storage list quirk: a prefix equal to an object
+            key behaves like a folder and only lists its children."""
+
+            def __init__(self) -> None:
+                self.objects: dict[str, bytes] = {}
+
+            def upload(self, path: str, data: bytes, file_options: dict | None = None) -> None:
+                self.objects[path] = bytes(data)
+
+            def update(self, path: str, data: bytes, file_options: dict | None = None) -> None:
+                self.objects[path] = bytes(data)
+
+            def download(self, path: str) -> bytes:
+                if path not in self.objects:
+                    raise FileNotFoundError(path)
+                return self.objects[path]
+
+            def list(self, path: str, options: dict | None = None) -> list[dict]:
+                prefix = (path or "").rstrip("/") + "/"
+                children: list[dict] = []
+                for object_key in self.objects:
+                    if object_key.startswith(prefix):
+                        remainder = object_key[len(prefix):]
+                        children.append({"name": remainder.split("/", 1)[0]})
+                return children
+
+        storage = ProjectArtifactStorage(
+            {
+                "enabled": True,
+                "backend": "supabase",
+                "bucket": "cli-project-artifacts",
+                "max_bytes": 1024,
+            }
+        )
+        fake_bucket = FakeSupabaseBucket()
+        storage._supabase_bucket = lambda: fake_bucket  # type: ignore[method-assign]
+
+        storage.put("project-sb", sha256, content, "application/octet-stream")
+
+        self.assertTrue(storage.contains("project-sb", sha256))
+        self.assertFalse(storage.contains("project-sb", "0" * 64))
+
     def test_artifact_declarations_require_integrity_and_reject_traversal(self) -> None:
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             validate_artifact_references([{"path": "assembly.step", "media_type": "model/step"}])
