@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import contextlib
 import json
 import logging
@@ -81,6 +80,7 @@ from forma_core.runtime import (
 )
 from forma_core.user_integrations import UserIntegrationStore, apply_user_integrations_to_environment, default_integration_store
 from apps.api.storage import get_image_storage_config, upload_image_to_supabase_s3
+from apps.api.security import MAX_IMAGE_ENCODED_CHARS, consume_operation_limit, security_config, validate_image_limits
 from forma_core.utils import generate_mermaid_chart, generate_svg_schematic
 from forma_core.validation import build_validation_summary, validate_circuit
 
@@ -348,6 +348,7 @@ def get_a2a_capabilities() -> Dict[str, Any]:
         "llm_runtime": llm_runtime,
         "image_output": get_image_output_debug_config(),
         "image_storage": get_image_storage_config(),
+        "security": security_config(),
         "observability": get_langfuse_debug_config(),
         "workflows": list_workflows(),
         "data_sources": list_generation_data_sources(),
@@ -370,16 +371,9 @@ def get_a2a_capabilities() -> Dict[str, Any]:
 def _decode_image_data(image_data: Optional[str]) -> Tuple[Optional[bytes], Optional[str]]:
     if not image_data:
         return None, None
-
-    base64_data = image_data.strip()
-    image_mime_type = None
-    if "," in image_data:
-        header, base64_data = image_data.split(",", 1)
-        if "data:" in header and ";base64" in header:
-            image_mime_type = header.split(";")[0].replace("data:", "")
-        base64_data = base64_data.strip()
-
-    return base64.b64decode(base64_data), image_mime_type or "image/png"
+    if len(image_data) > MAX_IMAGE_ENCODED_CHARS:
+        raise ValueError("Reference image exceeds the configured encoded size limit.")
+    return validate_image_limits(image_data)
 
 
 def _attach_stored_image_metadata(
@@ -956,6 +950,12 @@ def build_generation_response(
     _apply_owner_user_integrations(owner_user_id)
 
     prompt_text = (prompt or "").strip()
+    try:
+        max_prompt_chars = max(1, int(config.get("FORMA_MAX_PROMPT_CHARS", "12000")))
+    except ValueError:
+        max_prompt_chars = 12000
+    if len(prompt_text) > max_prompt_chars:
+        raise ValueError("Prompt exceeds the configured length limit.")
     workflow_id = normalize_workflow_id(workflow)
     normalized_retry_stage = str(retry_stage or "").strip() or None
     prior_generation_run: Optional[Dict[str, Any]] = None
@@ -1014,9 +1014,7 @@ def build_generation_response(
     try:
         image_bytes, image_mime_type = _decode_image_data(image_data)
     except Exception as exc:
-        if not has_prompt:
-            raise ValueError("Reference image could not be decoded.") from exc
-        image_bytes, image_mime_type = None, None
+        raise ValueError("Reference image could not be decoded or exceeds the configured limits.") from exc
 
     llm_config = get_workflow_debug_config(
         workflow_id,
@@ -1206,6 +1204,9 @@ async def call_forma_action(
     if normalized == "generate_project":
         ensure_hosted_chat_enabled()
     owner_user_id = _context_owner_user_id(user_context)
+    if normalized in {"generate_project", "validate_circuit"}:
+        identity = a2a_principal_for_user(user_context) or "anonymous"
+        consume_operation_limit("generation" if normalized == "generate_project" else "validation", identity)
     project_id = payload.get("project_id")
 
     if project_id and not owner_user_id:
