@@ -703,7 +703,7 @@ class ProjectDetail(ProjectSummary):
 # ==========================================
 
 class GenerateProjectRequest(BaseModel):
-    prompt: str = Field(..., description="User's natural language project description")
+    prompt: str = Field(..., max_length=12000, description="User's natural language project description")
     project_id: Optional[str] = Field(
         None,
         description="Optional context project id whose workflow authorizes this generation.",
@@ -718,6 +718,7 @@ class GenerateProjectRequest(BaseModel):
     )
     image_data: Optional[str] = Field(
         None,
+        max_length=8 * 1024 * 1024,
         description="Optional data URL or base64-encoded reference image for multimodal project extraction"
     )
     generate_image: bool = Field(

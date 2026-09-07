@@ -147,20 +147,35 @@ To make backend logs visible in the local frontend LOGS tab when running uvicorn
 BACKEND_LOG_FILE=.logs/backend-dev.log uvicorn apps.api.main:app --reload --port 8000
 ```
 
-## Local execution worker
+## Local FormaWorker
 
-The planned Mini-PC runtime is a local execution worker, not a second public Forma
-deployment. It runs the backend code locally for OpenCode-owned conversations,
-project compilation, deterministic validation, and delivery back to cloud Forma.
-It may bind to `127.0.0.1:8000` for local MCP use, but it must not become the
-browser API origin or a public Cloudflare Tunnel upstream.
+The OpenCode execution worker runs as a restricted Windows service named
+`FormaBackend` and binds only to `127.0.0.1:8000`. It is not the browser API
+origin and must not be published through Cloudflare Tunnel. Cloud Forma remains
+authoritative for browser traffic, accepted projects, revisions, and display.
 
 Use `FORMA_DEPLOYMENT_MODE=local` for the worker and keep local execution state
-separate from cloud production persistence. Cloud delivery uses the approved
-outbound Forma CLI/API credential. Host service provisioning, account creation,
-ACLs, and local MCP setup belong to `caid-technologies/local-server-config`.
-Keep passwords, service credentials, tunnel tokens, and runtime environment values
-out of this repository.
+separate from cloud production persistence. The worker uses local execution mode
+for authoring, compilation, validation, and
+resume state, then sends accepted snapshots outbound through the authenticated
+CLI delivery flow. Host service provisioning, account creation, ACLs, and worker
+environment values belong to `caid-technologies/local-server-config`; keep
+passwords, service tokens, and provider keys out of this repository.
+
+Validate the cloud environment without printing secrets:
+
+```bash
+python scripts/operations/verify-production-env.py --environment production --require-live-clerk
+```
+
+Then verify local authoring and explicit delivery:
+
+```bash
+forma-oss init ./my-project
+forma-oss build "a low-voltage plant monitor" --path ./my-project
+forma-oss login
+forma-oss projects deliver --path ./my-project --yes --json
+```
 
 Run generation directly through the sole Forma Core CLI with `--llm provider/model`:
 

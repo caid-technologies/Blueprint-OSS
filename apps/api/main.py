@@ -181,6 +181,7 @@ from apps.api.auth import (
     require_destructive_user_context,
     require_user_context,
 )
+from apps.api.security import SecurityLimitsMiddleware, cors_origins, security_config
 from apps.api.project_deletion import (
     DELETION_POLICY_VERSION,
     PERMITTED_CONTRIBUTION_PURPOSES,
@@ -341,14 +342,16 @@ class ApiPrefixCompatibilityMiddleware:
 
 app.add_middleware(ApiPrefixCompatibilityMiddleware)
 app.add_middleware(VercelOidcContextMiddleware)
+app.add_middleware(SecurityLimitsMiddleware)
 
-# Enable CORS for Next.js frontend
+# Credentialed CORS must be explicit. Hosted deployments with no configured
+# origins remain API-only instead of accidentally exposing browser credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In development, allow all. Can narrow in production
+    allow_origins=cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 app.include_router(logs_router, dependencies=[Depends(require_admin_user_context)])
@@ -592,6 +595,7 @@ def debug_config_endpoint(
             "video_generation": GMICloudProvider().get_debug_config(),
             "video_self_correction": FireworksVideoReviewClient().get_debug_config(),
             "video_storage": get_video_storage_config(),
+            "security": security_config(),
             "workflows": list_workflows(),
             "data_sources": list_generation_data_sources(),
             "project_namespaces": [namespace.model_dump(mode="json") for namespace in list_project_namespaces()],
