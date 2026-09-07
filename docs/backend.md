@@ -147,20 +147,20 @@ To make backend logs visible in the local frontend LOGS tab when running uvicorn
 BACKEND_LOG_FILE=.logs/backend-dev.log uvicorn apps.api.main:app --reload --port 8000
 ```
 
-## Self-hosted tunnel origin
+## Local execution worker
 
-The planned self-hosted production backend runs as a dedicated Windows service
-named `FormaBackend`, under a restricted non-interactive local account. It must
-bind only to `127.0.0.1:8000`; Cloudflare Tunnel is the only intended public
-ingress path. The service must use `FORMA_DEPLOYMENT_MODE=hosted`, production
-Supabase/Redis configuration, and must not set `FORMA_DEVELOPMENT_MODE=true`.
+The planned Mini-PC runtime is a local execution worker, not a second public Forma
+deployment. It runs the backend code locally for OpenCode-owned conversations,
+project compilation, deterministic validation, and delivery back to cloud Forma.
+It may bind to `127.0.0.1:8000` for local MCP use, but it must not become the
+browser API origin or a public Cloudflare Tunnel upstream.
 
-Host service provisioning, account creation, ACLs, and tunnel configuration belong
-to `caid-technologies/local-server-config`. Keep passwords, tunnel tokens, and
-runtime environment values out of this repository. Verify the local backend before
-pointing tunnel ingress at it, then test `/`, `/api/runtime/config`, `/api/mcp`,
-A2A, WebSocket, request-body, and streamed-response paths without introducing an
-additional `/api` prefix.
+Use `FORMA_DEPLOYMENT_MODE=local` for the worker and keep local execution state
+separate from cloud production persistence. Cloud delivery uses the approved
+outbound Forma CLI/API credential. Host service provisioning, account creation,
+ACLs, and local MCP setup belong to `caid-technologies/local-server-config`.
+Keep passwords, service credentials, tunnel tokens, and runtime environment values
+out of this repository.
 
 Run generation directly through the sole Forma Core CLI with `--llm provider/model`:
 

@@ -5,6 +5,19 @@ Forma supports these clients through two portable surfaces:
 - A shared Agent Skill at `.agents/skills/forma-hardware/SKILL.md`.
 - An MCP Streamable HTTP endpoint at `http://127.0.0.1:8000/mcp` (or `/api/mcp` when the deployment adds an `/api` prefix).
 
+## Cloud and local worker boundary
+
+Cloud Forma remains the public browser API, chat/persistence authority, and project
+viewer. A Mini-PC may run the same backend code as a local execution worker for
+OpenCode-owned conversations, compilation, deterministic validation, and generation
+when explicitly configured. The worker delivers accepted snapshots and revisions
+back to cloud Forma through authenticated outbound HTTPS/CLI delivery.
+
+The local worker is not a second hosted Forma deployment. Do not point the Vercel
+browser API at it, copy production Supabase/Clerk/Redis state to it, or publish its
+loopback MCP/API port through a tunnel for normal operation. A narrowly scoped
+remote worker-control endpoint would require separate security review.
+
 Start the backend in local authentication mode:
 
 ```bash
@@ -92,7 +105,7 @@ Verify it with:
 opencode mcp list
 ```
 
-## Protected deployments
+## Protected cloud deployments
 
 The MCP route accepts either a Clerk administrator session or the dedicated `FORMA_MCP_API_KEY`. The API key must contain at least 32 characters. Pass the selected credential as an `Authorization: Bearer ...` header and keep it in an environment variable rather than committing it.
 
