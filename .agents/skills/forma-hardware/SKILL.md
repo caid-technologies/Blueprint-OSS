@@ -5,7 +5,7 @@ description: Compile, validate, inspect, or generate safe low-voltage maker-elec
 
 # Forma Hardware
 
-Use the host agent to author the design and Forma to normalize Hardware IR, apply deterministic electrical checks, and render diagrams. For CAD-capable workflows, use the Forma-owned OpenCAD adapter described in [references/cad.md](references/cad.md). Never replace a failed live generation with simulated output unless the user explicitly requests simulation.
+Use the host agent to author the design and Forma to normalize Hardware IR, apply deterministic electrical checks, and render diagrams. The host agent owns the conversation and the working project state; Forma owns accepted snapshots, deterministic validation, persistence, and display. None of the compile, validate, or render steps below transfer authoring ownership back to Forma — Forma never directs the agent's internal authoring steps. For CAD-capable workflows, use the Forma-owned OpenCAD adapter described in [references/cad.md](references/cad.md). Never replace a failed live generation with simulated output unless the user explicitly requests simulation.
 
 ## CAD dependency
 

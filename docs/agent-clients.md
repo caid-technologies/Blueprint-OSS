@@ -5,6 +5,30 @@ Forma supports these clients through two portable surfaces:
 - A shared Agent Skill at `.agents/skills/forma-hardware/SKILL.md`.
 - An MCP Streamable HTTP endpoint at `http://127.0.0.1:8000/mcp` (or `/api/mcp` when the deployment adds an `/api` prefix).
 
+## Ownership boundary
+
+This is the canonical ownership statement shared with the OpenCode extension
+repository (`caid-technologies/local-server-config`).
+
+- **The host agent owns the conversation and the working project state.** It
+  runs clarify → plan → author → compile → repair → iterate → validate →
+  deliver. The agent writes the Hardware IR with its own model and keeps that
+  working state in its own workspace.
+- **Forma owns accepted snapshots, deterministic validation, persistence, and
+  display.** Forma receives, stores, and shows delivered results as project
+  revisions. It does not run a parallel authoring agent.
+- **Deterministic validation and compiler tools are utilities, not ownership.**
+  `forma.compile_project` and `forma.validate_circuit` normalize and check what
+  the agent authored; calling them does not transfer authoring ownership back to
+  Forma.
+- **Working state lives with the agent; delivered state lives in Forma
+  revisions.** The undelivered draft belongs to the agent's workspace; delivering
+  publishes an accepted snapshot into Forma.
+
+Both repositories must state this same boundary. When in doubt, the visible
+component identifier (OpenCode conversation, Forma project/revision) tells you
+which side owns it.
+
 Start the backend in local authentication mode:
 
 ```bash
