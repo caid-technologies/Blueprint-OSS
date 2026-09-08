@@ -230,6 +230,7 @@ class DBCliProjectDelivery(Base):
     revision = Column(Integer, nullable=False)
     parent_revision_id = Column(String, nullable=True)
     manifest_json = Column(JSON, nullable=False)
+    manifest_digest = Column(String, nullable=False, default="")
     status = Column(String, index=True, nullable=False, default="pending")
     receipt_json = Column(JSON, nullable=True)
     created_at = Column(String, index=True, nullable=False)

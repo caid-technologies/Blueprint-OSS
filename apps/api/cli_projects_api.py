@@ -94,6 +94,110 @@ def _push_idempotency_key(manifest: dict[str, Any]) -> str:
     return f"push:{hashlib.sha256(canonical).hexdigest()}"
 
 
+def _manifest_digest(manifest: dict[str, Any]) -> str:
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _delivery_manifest_digest(delivery: dict[str, Any]) -> str:
+    return str(delivery.get("manifest_digest") or "").strip()
+
+
+def _ensure_delivery_key_matches(delivery: dict[str, Any], manifest: dict[str, Any]) -> None:
+    stored_digest = _delivery_manifest_digest(delivery)
+    # Rows created before manifest_digest was introduced cannot be compared
+    # safely after normalization, so preserve their existing replay behavior.
+    if not stored_digest or stored_digest == _manifest_digest(manifest):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "IDEMPOTENCY_KEY_REUSE",
+            "message": "The idempotency_key was already used for different project content.",
+        },
+    )
+
+
+def _delivery_plan(project_id: str, owner: str) -> tuple[int, str]:
+    latest = get_cli_project_revision(project_id, owner)
+    latest_revision = int((latest or {}).get("revision") or 0)
+    return latest_revision + 1, str(uuid.uuid4())
+
+
+def _reserve_and_materialize_delivery(
+    payload: dict[str, Any],
+    owner: str,
+    idempotency_key: str,
+    expected_revision_id: str | None,
+) -> dict[str, Any]:
+    project_id = str(payload.get("project_id") or "").strip()
+    digest = _manifest_digest(payload)
+    delivery = get_cli_project_delivery(project_id, owner, idempotency_key)
+    if delivery is None:
+        planned_revision, planned_revision_id = _delivery_plan(project_id, owner)
+        delivery = insert_cli_project_delivery(
+            {
+                "delivery_id": str(uuid.uuid4()),
+                "project_id": project_id,
+                "owner_user_id": owner,
+                "idempotency_key": idempotency_key,
+                "revision_id": planned_revision_id,
+                "revision": planned_revision,
+                "parent_revision_id": expected_revision_id,
+                "manifest_json": payload,
+                "manifest_digest": digest,
+                "status": "pending",
+                "receipt_json": None,
+                "created_at": _now(),
+                "completed_at": None,
+            }
+        )
+    _ensure_delivery_key_matches(delivery, payload)
+    if delivery.get("status") == "complete" and delivery.get("receipt"):
+        return delivery
+    if delivery.get("revision_id") and get_cli_project_revision(
+        project_id,
+        owner,
+        delivery["revision_id"],
+    ) is not None:
+        return delivery
+
+    try:
+        saved = insert_cli_project_revision(
+            payload,
+            owner,
+            expected_revision_id=delivery.get("parent_revision_id"),
+            revision_id=delivery.get("revision_id"),
+            revision=delivery.get("revision"),
+        )
+    except CliProjectConflictError as exc:
+        current = get_cli_project_delivery(project_id, owner, idempotency_key)
+        if current is not None:
+            _ensure_delivery_key_matches(current, payload)
+            if current.get("revision_id") and get_cli_project_revision(
+                project_id,
+                owner,
+                current["revision_id"],
+            ) is not None:
+                return current
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_revision_conflict_detail(project_id, owner, exc),
+        ) from exc
+    if (
+        saved.get("revision_id") != delivery.get("revision_id")
+        or saved.get("revision") != delivery.get("revision")
+    ):
+        updated = update_cli_project_delivery(
+            delivery["delivery_id"],
+            owner,
+            {"revision_id": saved["revision_id"], "revision": saved["revision"]},
+        )
+        if updated is not None:
+            delivery = updated
+    return delivery
+
+
 def _artifact_declaration(artifact: dict[str, Any]) -> dict[str, Any]:
     return {
         "path": artifact.get("path"),
@@ -194,37 +298,7 @@ async def push_cli_project(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     idempotency_key = request.idempotency_key or _push_idempotency_key(manifest_document)
-    existing = get_cli_project_delivery(project_id, owner, idempotency_key)
-    if existing is not None:
-        return _pending_delivery_response(existing)
-
-    try:
-        saved = insert_cli_project_revision(
-            payload,
-            owner,
-            expected_revision_id=request.parent_revision_id,
-        )
-    except CliProjectConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_revision_conflict_detail(project_id, owner, exc),
-        ) from exc
-
-    record = {
-        "delivery_id": str(uuid.uuid4()),
-        "project_id": saved["project_id"],
-        "owner_user_id": owner,
-        "idempotency_key": idempotency_key,
-        "revision_id": saved["revision_id"],
-        "revision": saved["revision"],
-        "parent_revision_id": saved["parent_revision_id"],
-        "manifest_json": payload,
-        "status": "pending",
-        "receipt_json": None,
-        "created_at": saved["created_at"],
-        "completed_at": None,
-    }
-    delivery = insert_cli_project_delivery(record)
+    delivery = _reserve_and_materialize_delivery(payload, owner, idempotency_key, request.parent_revision_id)
     return _pending_delivery_response(delivery)
 
 
@@ -271,37 +345,7 @@ async def deliver_cli_project(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    existing = get_cli_project_delivery(project_id, owner, idempotency_key)
-    if existing is not None:
-        return _pending_delivery_response(existing)
-
-    try:
-        saved = insert_cli_project_revision(
-            payload,
-            owner,
-            expected_revision_id=request.parent_revision_id,
-        )
-    except CliProjectConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=_revision_conflict_detail(project_id, owner, exc),
-        ) from exc
-
-    record = {
-        "delivery_id": str(uuid.uuid4()),
-        "project_id": saved["project_id"],
-        "owner_user_id": owner,
-        "idempotency_key": idempotency_key,
-        "revision_id": saved["revision_id"],
-        "revision": saved["revision"],
-        "parent_revision_id": saved["parent_revision_id"],
-        "manifest_json": payload,
-        "status": "pending",
-        "receipt_json": None,
-        "created_at": saved["created_at"],
-        "completed_at": None,
-    }
-    delivery = insert_cli_project_delivery(record)
+    delivery = _reserve_and_materialize_delivery(payload, owner, idempotency_key, request.parent_revision_id)
     return _pending_delivery_response(delivery)
 
 

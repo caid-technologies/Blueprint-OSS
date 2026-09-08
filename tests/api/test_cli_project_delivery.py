@@ -83,13 +83,14 @@ class CliProjectDeliveryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_deliver_creates_pending_receipt_and_defaults_to_private(self) -> None:
         captured: dict[str, object] = {}
 
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             captured["manifest"] = manifest
             captured["owner"] = owner
             return _saved_revision()
 
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save) as save,
             patch.object(cli_projects_api, "insert_cli_project_delivery", return_value=_delivery_record()) as save_delivery,
         ):
@@ -105,12 +106,13 @@ class CliProjectDeliveryApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_deliver_honors_explicit_visibility(self) -> None:
         captured: dict[str, object] = {}
 
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             captured["manifest"] = manifest
             return _saved_revision()
 
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save),
             patch.object(cli_projects_api, "insert_cli_project_delivery", return_value=_delivery_record()) as save_delivery,
         ):
@@ -134,6 +136,7 @@ class CliProjectDeliveryApiTests(unittest.IsolatedAsyncioTestCase):
         existing = _delivery_record()
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=existing) as fetch,
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=_saved_revision()),
             patch.object(cli_projects_api, "insert_cli_project_revision") as save,
             patch.object(cli_projects_api, "insert_cli_project_delivery") as save_delivery,
         ):
@@ -144,16 +147,60 @@ class CliProjectDeliveryApiTests(unittest.IsolatedAsyncioTestCase):
         save.assert_not_called()
         save_delivery.assert_not_called()
 
+    async def test_deliver_rejects_idempotency_key_reuse_with_different_content(self) -> None:
+        existing = _delivery_record()
+        existing["manifest_digest"] = "different-content"
+        with (
+            patch.object(cli_projects_api, "get_cli_project_delivery", return_value=existing),
+            patch.object(cli_projects_api, "insert_cli_project_revision") as save,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await cli_projects_api.deliver_cli_project(_deliver_request(), _user())
+
+        self.assertEqual(409, raised.exception.status_code)
+        self.assertEqual("IDEMPOTENCY_KEY_REUSE", raised.exception.detail["code"])
+        save.assert_not_called()
+
+    async def test_deliver_reserves_before_materializing_revision(self) -> None:
+        events: list[str] = []
+
+        def fake_insert_delivery(record):
+            events.append("reserve")
+            return {
+                **_delivery_record(),
+                "project_id": record["project_id"],
+                "idempotency_key": record["idempotency_key"],
+                "revision_id": record["revision_id"],
+                "revision": record["revision"],
+                "manifest": record["manifest_json"],
+                "manifest_digest": record["manifest_digest"],
+            }
+
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
+            events.append("revision")
+            return {**_saved_revision(), "revision_id": revision_id, "revision": revision}
+
+        with (
+            patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
+            patch.object(cli_projects_api, "insert_cli_project_delivery", side_effect=fake_insert_delivery),
+            patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save),
+        ):
+            await cli_projects_api.deliver_cli_project(_deliver_request(), _user())
+
+        self.assertEqual(["reserve", "revision"], events)
+
     async def test_deliver_409_is_enriched_with_current_server_revision(self) -> None:
         latest = {"revision_id": "server-rev-9", "revision": 9}
 
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             raise CliProjectConflictError("The cloud project changed since the local project was last pulled.")
 
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", side_effect=[None, None, latest]),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save),
-            patch.object(cli_projects_api, "get_cli_project_revision", return_value=latest),
+            patch.object(cli_projects_api, "insert_cli_project_delivery", return_value=_delivery_record()),
         ):
             with self.assertRaises(HTTPException) as raised:
                 await cli_projects_api.deliver_cli_project(_deliver_request(), _user())
@@ -345,7 +392,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         captured: dict[str, object] = {}
         captured_keys: list[str] = []
 
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             captured["manifest"] = manifest
             captured["owner"] = owner
             return _saved_revision()
@@ -357,6 +404,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         request = cli_projects_api.ProjectPushRequest(manifest=_manifest())
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save) as save,
             patch.object(cli_projects_api, "insert_cli_project_delivery", side_effect=fake_insert_delivery) as save_delivery,
         ):
@@ -373,7 +421,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_push_honors_explicit_visibility_and_key(self) -> None:
         captured: dict[str, object] = {}
 
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             captured["manifest"] = manifest
             return _saved_revision()
 
@@ -382,6 +430,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save),
             patch.object(cli_projects_api, "insert_cli_project_delivery", return_value=_delivery_record()),
         ):
@@ -406,6 +455,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         request = cli_projects_api.ProjectPushRequest(manifest=_manifest(), idempotency_key="key-1")
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=existing) as fetch,
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=_saved_revision()),
             patch.object(cli_projects_api, "insert_cli_project_revision") as save,
             patch.object(cli_projects_api, "insert_cli_project_delivery") as save_delivery,
         ):
@@ -427,6 +477,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         request = cli_projects_api.ProjectPushRequest(manifest=_manifest())
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", return_value=None),
             patch.object(cli_projects_api, "insert_cli_project_revision", return_value=_saved_revision()),
             patch.object(cli_projects_api, "insert_cli_project_delivery", side_effect=fake_insert_delivery),
         ):
@@ -437,15 +488,16 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(64, len(captured_key[0].removeprefix("push:")))
 
     async def test_push_409_is_enriched_with_current_server_revision(self) -> None:
-        def fake_save(manifest, owner, *, expected_revision_id=None):
+        def fake_save(manifest, owner, *, expected_revision_id=None, revision_id=None, revision=None):
             raise CliProjectConflictError("The cloud project changed since the local project was last pulled.")
 
         latest = {"revision_id": "server-rev-9", "revision": 9}
         request = cli_projects_api.ProjectPushRequest(manifest=_manifest(), parent_revision_id="stale")
         with (
             patch.object(cli_projects_api, "get_cli_project_delivery", return_value=None),
+            patch.object(cli_projects_api, "get_cli_project_revision", side_effect=[None, None, latest]),
             patch.object(cli_projects_api, "insert_cli_project_revision", side_effect=fake_save),
-            patch.object(cli_projects_api, "get_cli_project_revision", return_value=latest),
+            patch.object(cli_projects_api, "insert_cli_project_delivery", return_value=_delivery_record()),
         ):
             with self.assertRaises(HTTPException) as raised:
                 await cli_projects_api.push_cli_project(request, _user())
