@@ -1260,7 +1260,7 @@ class UserIntegrationTests(unittest.TestCase):
 
             self.assertIsInstance(default_integration_store(), EncryptedFileIntegrationStore)
 
-    def test_supabase_workspace_load_failure_does_not_crash_runtime_apply(self) -> None:
+    def test_supabase_workspace_load_failure_only_uses_empty_fallback_locally(self) -> None:
         class BrokenWorkspaceStore(SupabaseWorkspaceIntegrationStore):
             calls = 0
 
@@ -1296,12 +1296,16 @@ class UserIntegrationTests(unittest.TestCase):
         with isolated_integration_env(), self.assertLogs("forma_core.user_integrations", level="WARNING") as logs:
             first = apply_user_integrations_to_environment(BrokenWorkspaceStore())
             second = apply_user_integrations_to_environment(BrokenWorkspaceStore())
+            os.environ["FORMA_DEPLOYMENT_MODE"] = "hosted"
+            user_integrations._WORKSPACE_CONFIG_FAILURE_CACHE.clear()
+            with self.assertRaisesRegex(RuntimeError, "PGRST002"):
+                apply_user_integrations_to_environment(BrokenWorkspaceStore())
 
         self.assertEqual([], first.integrations)
         self.assertEqual([], second.integrations)
-        self.assertEqual(1, BrokenWorkspaceStore.calls)
+        self.assertEqual(2, BrokenWorkspaceStore.calls)
         self.assertIn("PGRST002", "\n".join(logs.output))
-        self.assertEqual(1, "\n".join(logs.output).count("PGRST002"))
+        self.assertEqual(2, "\n".join(logs.output).count("PGRST002"))
 
 
 if __name__ == "__main__":
