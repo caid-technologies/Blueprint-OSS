@@ -11,7 +11,6 @@ create table if not exists public.cli_project_deliveries (
   revision integer not null check (revision >= 0),
   parent_revision_id text,
   manifest_json jsonb not null,
-  manifest_digest text not null default '',
   status text not null default 'pending',
   receipt_json jsonb,
   created_at text not null,
@@ -34,6 +33,3 @@ grant select, insert, update, delete on table public.cli_project_deliveries to s
 
 comment on table public.cli_project_deliveries is
   'Idempotent CLI/agent delivery records linking delivered revisions to receipts.';
-
-alter table public.cli_project_deliveries
-  add column if not exists manifest_digest text not null default '';
