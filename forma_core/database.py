@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from forma_core.runtime import forma_dev_mode_enabled
+from forma_core.runtime import deployment_mode_enabled, forma_dev_mode_enabled
 from forma_core.project_list_cache import invalidate_project_lists
 from forma_core.workspaces.projects.objects import attach_project_object_metadata_to_dict
 from forma_core.workspaces.design_briefs import DesignBrief, DesignBriefCreate
@@ -212,11 +212,21 @@ def _select_database_config() -> tuple[DatabaseConfig, Any, Any]:
         return DatabaseConfig(backend="supabase", source=f"SUPABASE_URL+{key_source}", url=url), None, client
 
     if url or key:
+        if deployment_mode_enabled():
+            raise RuntimeError(
+                "FORMA_DEPLOYMENT_MODE=hosted requires SUPABASE_URL plus "
+                "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY. Refusing to fall back to local SQLite."
+            )
         logger.warning(
             "Supabase client is partially configured. Provide both SUPABASE_URL and "
             "SUPABASE_SERVICE_ROLE_KEY/SUPABASE_SECRET_KEY. Falling back to SQLite."
         )
     else:
+        if deployment_mode_enabled():
+            raise RuntimeError(
+                "FORMA_DEPLOYMENT_MODE=hosted requires Supabase persistence. Set DATABASE_BACKEND=sqlite "
+                "only for an explicitly documented local/self-hosted deployment."
+            )
         _warn_ignored_database_urls()
 
     provider = create_sqlite_provider(source="SQLITE_DATABASE_URL", url=sqlite_url)

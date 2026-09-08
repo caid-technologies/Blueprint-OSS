@@ -1480,6 +1480,13 @@ class SupabaseWorkspaceIntegrationStore(UserIntegrationStore):
                 or []
             )
         except Exception as exc:
+            if deployment_mode_enabled():
+                logger.error(
+                    "Supabase workspace integration config load failed for %s; refusing an empty hosted fallback: %s",
+                    self.storage_label,
+                    exc,
+                )
+                raise
             fallback = UserIntegrationConfig()
             logger.warning(
                 "Supabase workspace integration config load failed for %s; using empty runtime config until Supabase is ready: %s",
@@ -1804,7 +1811,7 @@ def apply_user_integrations_to_environment(
     try:
         config = resolved_store.load()
     except Exception as exc:
-        if not fail_open:
+        if not fail_open or deployment_mode_enabled():
             raise
         logger.warning(
             "Integration config load failed from %s; using empty runtime config: %s",

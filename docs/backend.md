@@ -131,7 +131,8 @@ Validation is run after the netlist step. Critical issues trigger a repair loop 
 
 ## Startup behavior
 On startup the server:
-- Initializes the DB schema
+- Validates hosted persistence configuration and refuses an implicit SQLite fallback
+- Initializes the selected DB schema
 - Auto-seeds component templates if the catalog is empty
 
 ## Running locally

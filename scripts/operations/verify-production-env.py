@@ -132,6 +132,24 @@ def validate(env: dict[str, str], *, require_live_clerk: bool) -> CheckReport:
     report.check("Supabase URL present", bool(value("SUPABASE_URL")))
     report.check("Supabase service/secret key present", bool(first_present(env, ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY"))))
     report.check("Database backend is Supabase", value("DATABASE_BACKEND").lower() == "supabase", f"DATABASE_BACKEND={value('DATABASE_BACKEND') or '<unset>'}")
+    redis_url = value("REDIS_URL")
+    upstash_url = value("UPSTASH_REDIS_REST_URL")
+    upstash_token = value("UPSTASH_REDIS_REST_TOKEN")
+    redis_prefix = value("REDIS_CACHE_PREFIX")
+    report.check(
+        "Project cache configuration present",
+        bool(redis_prefix and (redis_url or (upstash_url and upstash_token))),
+    )
+    local_backend_values = {"file", "local", "json", "sqlite", "sqlite3"}
+    for label, name in (
+        ("Workspace integrations are not file-backed", "FORMA_WORKSPACE_INTEGRATIONS_BACKEND"),
+        ("User integrations are not file-backed", "FORMA_USER_INTEGRATIONS_BACKEND"),
+        ("Image storage is not local", "FORMA_IMAGE_STORAGE_BACKEND"),
+        ("CLI artifact storage is not local", "FORMA_CLI_ARTIFACT_STORAGE_BACKEND"),
+        ("Shared integration storage is not file-backed", "FORMA_INTEGRATIONS_BACKEND"),
+    ):
+        configured = value(name).lower()
+        report.check(label, configured not in local_backend_values, f"{name}={configured or '<unset>'}")
     deployment_mode = value("FORMA_DEPLOYMENT_MODE") or "local"
     report.check(
         "Deployment mode is hosted",

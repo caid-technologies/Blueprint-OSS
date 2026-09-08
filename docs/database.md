@@ -15,6 +15,36 @@ The provider is selected once during application composition. Domain-facing data
 
 There is one physical application database per deployment. Passing an explicit path to `JobMetadataStore` creates a standalone SQLite provider only for isolated tests and the `jobs --local --db-path` inspection command; normal application code always uses the primary provider.
 
+## Production authority
+
+Hosted Forma has one persistence authority: the Supabase project configured by
+`SUPABASE_URL`. The Vercel UI reaches the backend API, and the local FormaWorker
+does not expose a browser API or use a second production database. It delivers
+accepted project snapshots through the authenticated CLI flow; those snapshots
+are then visible to the Vercel UI through the same Supabase-backed API.
+
+- Hosted startup requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY`; missing or partial values fail closed instead of selecting SQLite.
+- `DATABASE_BACKEND=sqlite` is an explicit exception for local or separately documented self-hosted deployments. It is not an acceptable production setting for the Vercel environment or the cloud-facing backend.
+- Run `python scripts/operations/verify-production-env.py --environment production --require-live-clerk` before publishing environment changes. It checks Supabase authority, Redis configuration, hosted mode, encryption, auth, request limits, and local ancillary-storage overrides without printing secrets.
+- Run `./scripts/models/verify-llm-providers.py --config-only` and verify the selected provider/model with a live smoke test before enabling hosted generation. Provider credentials remain server-only.
+
+## Operations
+
+- **Backups:** The Supabase project owner is responsible for enabling and reviewing the plan's encrypted backup/PITR coverage and retention. A restore must be tested against the current migration set before it is treated as a rollback option.
+- **Migrations:** Schema changes are committed under `supabase/migrations/` and applied to the linked Supabase project by the deployment owner. Check migration status before and after deployment. Do not drop or rewrite production data in an application release.
+- **Retention:** Product deletion and retention rules apply to database rows, Storage objects, logs, and backups. The production owner must verify Supabase Storage lifecycle and backup expiry against `docs/project-deletion.md`; restored backups require deletion/audit replay before traffic resumes.
+- **Outages:** Hosted persistence has no implicit SQLite failover. Database initialization or hosted workspace-secret reads fail rather than silently creating a second authority. Redis is a best-effort cache; cache failures fall back to database reads and writes.
+- **Rollback:** Roll back application code first when possible. For schema incompatibilities, use a forward-compatible migration. Use a Supabase restore only under the project owner's incident procedure, after recording the restore point and replaying required deletion/audit changes.
+- **Encryption keys:** `FORMA_USER_SECRETS_KEY` must be stable across backend instances and is never placed in `NEXT_PUBLIC_*` variables. The stored `encryption_key_id` detects a changed key and raises an error rather than returning or overwriting undecipherable settings. Rotate it only with a reviewed decrypt-and-reencrypt migration and a verified backup.
+
+## Authority smoke test
+
+After deploying a backend or frontend change:
+
+1. Create or update a project through the Vercel UI and confirm it appears in `GET /api/projects`.
+2. Use the authenticated CLI delivery flow from the local worker and confirm the delivered project appears in the Vercel UI and the same API list.
+3. Confirm both records are present in the linked Supabase project and that no production `forma.db`, `forma_jobs.db`, or local artifact directory is being used by the cloud-facing process.
+
 ## Storage model
 Shared database models are defined in `forma_core/persistence/models.py`:
 
