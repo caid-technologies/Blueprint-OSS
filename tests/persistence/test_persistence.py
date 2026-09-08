@@ -871,6 +871,7 @@ class CliProjectDeliveryPersistenceTests(unittest.TestCase):
             "revision": 3,
             "parent_revision_id": "rev-b",
             "manifest_json": {"project_id": "project-a", "visibility": "private"},
+            "manifest_digest": "digest-a",
             "status": "pending",
             "receipt_json": None,
             "created_at": "2026-01-01T00:00:00Z",
@@ -885,6 +886,7 @@ class CliProjectDeliveryPersistenceTests(unittest.TestCase):
         delivery = repo.get_cli_project_delivery("project-a", "user-a", "key-a")
         self.assertEqual("delivery-a", delivery.delivery_id)
         self.assertEqual("rev-b", delivery.parent_revision_id)
+        self.assertEqual("digest-a", delivery.manifest_digest)
 
         by_id = repo.get_cli_project_delivery_by_id("delivery-a")
         self.assertEqual("project-a", by_id.project_id)

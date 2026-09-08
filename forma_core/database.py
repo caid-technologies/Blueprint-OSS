@@ -868,6 +868,8 @@ def insert_cli_project_revision(
     owner_user_id: str,
     *,
     expected_revision_id: Optional[str] = None,
+    revision_id: Optional[str] = None,
+    revision: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create one public-by-default project revision with compare-and-swap ancestry."""
     owner = _normalize_user_id(owner_user_id)
@@ -883,11 +885,28 @@ def insert_cli_project_revision(
             or (existing_identity.get("visibility") if isinstance(existing_identity, dict) else None)
             or requested_visibility
         )
-    next_revision = int(getattr(existing, "current_revision", 0)) + 1 if existing else 1
+    next_revision = int(revision) if revision is not None else (
+        int(getattr(existing, "current_revision", 0)) + 1 if existing else 1
+    )
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    revision_id = str(uuid.uuid4())
+    requested_revision_id = str(revision_id or uuid.uuid4())
+    latest = _DATABASE_REPOSITORY.get_cli_project_revision(project_id, owner)
+    if (
+        latest is not None
+        and int(getattr(latest, "revision", 0)) == next_revision
+        and str(getattr(latest, "parent_revision_id", "") or "") == str(expected_revision_id or "")
+        and getattr(latest, "manifest_json", None) == manifest
+    ):
+        return {
+            "revision_id": str(latest.revision_id),
+            "project_id": project_id,
+            "revision": int(latest.revision),
+            "parent_revision_id": getattr(latest, "parent_revision_id", None),
+            "manifest": getattr(latest, "manifest_json", manifest),
+            "created_at": getattr(latest, "created_at", None),
+        }
     revision_record = {
-        "revision_id": revision_id,
+        "revision_id": requested_revision_id,
         "project_id": project_id,
         "owner_user_id": owner,
         "revision": next_revision,
@@ -915,12 +934,12 @@ def insert_cli_project_revision(
     if saved is None:
         raise CliProjectConflictError("The cloud project changed since the local project was last pulled.")
     return {
-        "revision_id": revision_id,
+        "revision_id": str(getattr(saved, "revision_id", requested_revision_id)),
         "project_id": project_id,
-        "revision": next_revision,
-        "parent_revision_id": expected_revision_id,
-        "manifest": manifest,
-        "created_at": now,
+        "revision": int(getattr(saved, "revision", next_revision)),
+        "parent_revision_id": getattr(saved, "parent_revision_id", expected_revision_id),
+        "manifest": getattr(saved, "manifest_json", manifest),
+        "created_at": getattr(saved, "created_at", now),
     }
 
 
@@ -936,6 +955,7 @@ def _cli_delivery_from_record(record: Any) -> Optional[Dict[str, Any]]:
         "revision": int(record.revision),
         "parent_revision_id": getattr(record, "parent_revision_id", None),
         "manifest": getattr(record, "manifest_json", {}),
+        "manifest_digest": getattr(record, "manifest_digest", "") or "",
         "status": str(getattr(record, "status", "pending")),
         "receipt": getattr(record, "receipt_json", None),
         "created_at": getattr(record, "created_at", None),

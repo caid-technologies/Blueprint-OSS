@@ -689,7 +689,17 @@ class SupabaseRepository:
         return [_record(row) for row in rows]
 
     def insert_cli_project_delivery(self, record: Dict[str, Any]) -> Any:
-        rows = self._client.table("cli_project_deliveries").insert(record).execute().data or []
+        try:
+            rows = self._client.table("cli_project_deliveries").insert(record).execute().data or []
+        except Exception:
+            existing = self.get_cli_project_delivery(
+                record["project_id"],
+                record["owner_user_id"],
+                record["idempotency_key"],
+            )
+            if existing is None:
+                raise
+            return existing
         return _record(rows[0]) if rows else _record(record)
 
     def update_cli_project_delivery(
