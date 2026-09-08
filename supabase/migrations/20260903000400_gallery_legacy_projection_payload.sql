@@ -3,23 +3,23 @@
 create or replace view public.project_gallery_inventory as
 with hosted_latest as (
   select distinct on (project_id)
-    id as revision_id,
+    coalesce(to_jsonb(r)->>'revision_id', to_jsonb(r)->>'id') as revision_id,
     project_id,
     owner_user_id,
     revision,
     payload_json as revision_payload_json,
     created_at as revision_created_at
-  from public.project_revisions
+  from public.project_revisions r
   order by project_id, revision desc
 ), cli_latest as (
   select distinct on (project_id)
-    id as revision_id,
+    coalesce(to_jsonb(r)->>'revision_id', to_jsonb(r)->>'id') as revision_id,
     project_id,
     owner_user_id,
     revision,
     manifest_json as revision_payload_json,
     created_at as revision_created_at
-  from public.cli_project_revisions
+  from public.cli_project_revisions r
   order by project_id, revision desc
 )
 select
