@@ -18,6 +18,7 @@ from jwt import PyJWKClient
 from apps.api.auth_mode import clerk_auth_required
 from apps.api.cli_auth_store import is_cli_access_token, resolve_access_token
 from forma_core.config import config
+from forma_core.debug import new_error_correlation_id
 
 
 LOCAL_USER_ID = "local-dev-user"
@@ -235,6 +236,46 @@ def clerk_user_image_url(user_id: str) -> Optional[str]:
 def clerk_user_email(user_id: str) -> Optional[str]:
     profile = clerk_user_profile(user_id)
     return profile.get("email") if profile else None
+
+
+def opencode_allowed_emails() -> frozenset[str]:
+    """Return the exact server-configured allowlist for hosted OpenCode."""
+    return frozenset(email.strip().lower() for email in _csv_env("FORMA_OPENCODE_ALLOWED_EMAILS") if "@" in email)
+
+
+async def require_opencode_authoring_access(request: Request) -> UserContext:
+    """Require a hosted Clerk user whose primary email is explicitly allowed.
+
+    This intentionally does not use admin status or either service API key. The
+    email is resolved from Clerk by the server, never accepted from the caller.
+    """
+    deployment = (config.get("FORMA_DEPLOYMENT_MODE") or "").strip().lower()
+    try:
+        clerk_required = deployed_auth_required()
+    except RuntimeError:
+        clerk_required = False
+    if deployment not in {"hosted", "production", "prod"} or not clerk_required:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_opencode_auth_error("opencode_hosted_only", "Hosted OpenCode access is unavailable."),
+        )
+    context = await require_user_context(request)
+    if context.provider != "clerk" or not context.owner_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_opencode_auth_error("opencode_clerk_required", "A Clerk user session is required."),
+        )
+    email = clerk_user_email(context.owner_user_id)
+    if not email or email.strip().lower() not in opencode_allowed_emails():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_opencode_auth_error("opencode_email_not_allowed", "This account is not enabled for hosted OpenCode."),
+        )
+    return context
+
+
+def _opencode_auth_error(code: str, message: str) -> Dict[str, str]:
+    return {"code": code, "message": message, "correlation_id": new_error_correlation_id()}
 
 
 def _request_bearer_token(request: Any) -> Optional[str]:

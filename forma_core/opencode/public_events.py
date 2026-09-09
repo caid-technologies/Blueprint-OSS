@@ -1,0 +1,79 @@
+"""Project untrusted connector activity into a small public event contract."""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, timezone
+from uuid import UUID
+
+from forma_core.opencode.models import (
+    ConnectorEventInput,
+    OpenCodeCommandStatus,
+    OpenCodeEventKind,
+    PublicError,
+    PublicEvent,
+)
+
+
+_SECRET_PATTERN = re.compile(r"(?i)(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+")
+_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:[\\/]|/Users/|/home/|/tmp/|\\\\|\.{1,2}[\\/])")
+_INTERNAL_PATTERN = re.compile(r"(?i)(?:^|\s)(?:diff|patch|shell|command|tool|reasoning|traceback|exception)\s*[:=]")
+_PUBLIC_KINDS = {kind.value for kind in OpenCodeEventKind}
+_ERROR_MESSAGES = {
+    "connector_unavailable": "The OpenCode connector is unavailable.",
+    "command_failed": "The OpenCode project command failed.",
+    "validation_failed": "The project failed Forma validation.",
+}
+
+
+def project_public_event(
+    event: ConnectorEventInput,
+    *,
+    sequence: int,
+    session_id: str,
+    project_id: UUID,
+    created_at: datetime | None = None,
+) -> PublicEvent:
+    kind = event.kind.strip().lower()
+    if kind not in _PUBLIC_KINDS:
+        kind = OpenCodeEventKind.PROGRESS.value
+    safe_message = _safe_message(event.message) if kind == OpenCodeEventKind.ASSISTANT_MESSAGE.value else None
+    error = _public_error(event) if kind == OpenCodeEventKind.FAILED.value else None
+    if kind == OpenCodeEventKind.FAILED.value and error is None:
+        error = PublicError(
+            code="command_failed",
+            message=_ERROR_MESSAGES["command_failed"],
+            correlation_id=event.correlation_id or f"event_{event.event_id}",
+        )
+    return PublicEvent(
+        event_id=event.event_id,
+        sequence=sequence,
+        session_id=session_id,
+        project_id=project_id,
+        kind=OpenCodeEventKind(kind),
+        status=event.status,
+        message=safe_message,
+        revision_id=event.revision_id if kind == OpenCodeEventKind.COMPLETED.value else None,
+        validation=event.validation if kind in {OpenCodeEventKind.COMPLETED.value, OpenCodeEventKind.VALIDATING.value} else None,
+        artifact_ids=event.artifact_ids if kind == OpenCodeEventKind.COMPLETED.value else (),
+        error=error,
+        created_at=created_at or datetime.now(timezone.utc),
+    )
+
+
+def _safe_message(value: str | None) -> str | None:
+    if not value:
+        return None
+    if _PATH_PATTERN.search(value) or _INTERNAL_PATTERN.search(value):
+        return "The OpenCode connector is working on the project."
+    redacted = _SECRET_PATTERN.sub("[redacted]", value).strip()
+    return redacted[:2000] if redacted else None
+
+
+def _public_error(event: ConnectorEventInput) -> PublicError:
+    code = event.error_code if event.error_code in _ERROR_MESSAGES else "command_failed"
+    return PublicError(
+        code=code,
+        message=_ERROR_MESSAGES.get(code, "The OpenCode project command failed."),
+        correlation_id=event.correlation_id or f"event_{event.event_id}",
+    )

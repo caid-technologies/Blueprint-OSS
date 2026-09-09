@@ -2328,6 +2328,7 @@ def _persist_mcp_compile(
         "source_prompt": prompt,
     }
     hardware_ir = project.model_dump(mode="json")
+    source_job_id = str(arguments.get("source_job_id") or f"compile-{uuid.uuid4().hex}")
     if existing is not None:
         if not owner_user_id:
             raise ValueError("An authenticated owner is required to update a compiled project.")
@@ -2335,7 +2336,7 @@ def _persist_mcp_compile(
             project_id,
             owner_user_id,
             project,
-            source_job_id=f"compile-{uuid.uuid4().hex}",
+            source_job_id=source_job_id,
             prompt=prompt,
             chat_id=chat_id,
             visibility=visibility,
@@ -2345,7 +2346,7 @@ def _persist_mcp_compile(
             project_id,
             owner_user_id,
             project,
-            source_job_id=f"compile-{uuid.uuid4().hex}",
+            source_job_id=source_job_id,
             prompt=prompt,
             chat_id=chat_id,
             visibility=visibility,

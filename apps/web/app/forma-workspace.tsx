@@ -12,6 +12,13 @@ import {
 } from "../lib/active-llms";
 import { buildProjectDocsMarkdown, docsExportFilename } from "../lib/docs-export";
 import { normalizeContextSuggestions } from "../lib/context-suggestions";
+import {
+  cancelOpenCodeSession,
+  createOpenCodeSession,
+  listOpenCodeEvents,
+  submitOpenCodeCommand,
+  type OpenCodeEvent,
+} from "../lib/opencode";
 import { authoringModeEnabled, usableRuntimeLlmOptions, webConfig, type RuntimeConfigContract } from "../lib/config";
 import { calculateProjectCostMetrics, resolveProjectComponentInstances } from "../lib/project-cost-metrics";
 import { useFormaAuth } from "../lib/forma-auth";
@@ -63,7 +70,6 @@ import ConversationMessageList, {
 } from "./forma-workspace/conversation-message-list";
 import HostedChatMaintenance, {
   AUTHORING_MODE_ACTIVE_MESSAGE,
-  AUTHORING_MODE_HANDOFF_MESSAGE,
   AuthoringModeBanner,
   HOSTED_CHAT_MAINTENANCE_MESSAGE,
 } from "./forma-workspace/hosted-chat-maintenance";
@@ -237,6 +243,7 @@ type ActiveGenerationRun = {
   projectId?: string | null;
   chatId: string;
   assistantMessageId: string | null;
+  openCodeSessionId?: string | null;
   cancelled: boolean;
 };
 
@@ -1794,6 +1801,7 @@ export function FormaWorkspace({
   });
   const [formaDevMode, setFormaDevMode] = useState(false);
   const [authoringMode, setAuthoringMode] = useState(false);
+  const [openCodeConnectorId, setOpenCodeConnectorId] = useState<string | null>(null);
   const [generateProductImage, setGenerateProductImage] = useState(false);
   const [generationWorkflow, setGenerationWorkflow] = useState(DEFAULT_WORKFLOW_ID);
   const [generationWorkflows, setGenerationWorkflows] = useState<GenerationWorkflowOption[]>(defaultGenerationWorkflows);
@@ -1824,6 +1832,9 @@ export function FormaWorkspace({
   const pipelineStepsLastRequestedWorkflowRef = useRef<string | null>(null);
   const recoveryJobMissesRef = useRef(new Map<string, { misses: number; retryAfter: number }>());
   const activeGenerationRef = useRef<ActiveGenerationRun | null>(null);
+  const openCodeSessionsRef = useRef<Record<string, string>>({});
+  const openCodeCursorsRef = useRef<Record<string, number>>({});
+  const openCodePollTimersRef = useRef<Record<string, number>>({});
   const visibleChatSourceProjects = myProjectHistory;
   const visibleChatSourceItems = useMemo(
     () => authRequired
@@ -1934,7 +1945,7 @@ export function FormaWorkspace({
       ? generationInputValidation.message
       : null);
   const hostedChatReadOnly = !hostedChatEnabled;
-  const chatReadOnly = hostedChatReadOnly || authoringMode;
+  const chatReadOnly = hostedChatReadOnly && !authoringMode;
   const chatUnavailableReason = hostedChatReadOnly
     ? HOSTED_CHAT_MAINTENANCE_MESSAGE
     : authoringMode
@@ -2841,6 +2852,11 @@ export function FormaWorkspace({
         setHostedChatEnabled(config.deployment.hosted_chat_enabled);
       }
       setAuthoringMode(authoringModeEnabled(config));
+      setOpenCodeConnectorId(
+        typeof config.deployment?.opencode_connector_id === "string" && config.deployment.opencode_connector_id.trim()
+          ? config.deployment.opencode_connector_id.trim()
+          : null,
+      );
       setFormaDevMode(config.forma_dev_mode === true);
       const activeLlms = usableRuntimeLlmOptions(config);
       const selectedLlm = config.generation.selected_llm;
@@ -3305,6 +3321,7 @@ export function FormaWorkspace({
       jobId: null,
       chatId,
       assistantMessageId: null,
+      openCodeSessionId: null,
       cancelled: false,
     };
     activeGenerationRef.current = run;
@@ -3446,7 +3463,12 @@ export function FormaWorkspace({
         ? "Build stopped. Your project brief is preserved."
         : "Generation stopped. You can send another message whenever you're ready.",
     );
-    if (run.kind === "context-build" && run.projectId && run.planId) {
+    if (authoringMode && run.openCodeSessionId) {
+      delete openCodeSessionsRef.current[run.chatId];
+      void generationRequestHeaders()
+        .then((headers) => cancelOpenCodeSession(API_URL, headers, run.openCodeSessionId || ""))
+        .catch(() => undefined);
+    } else if (run.kind === "context-build" && run.projectId && run.planId) {
       void cancelContextBuild(run.projectId, run.planId);
     } else if (run.jobId) {
       void cancelGenerationJob(run.jobId);
@@ -3754,11 +3776,30 @@ export function FormaWorkspace({
   }, [activeChatId, chatMessageIdentityKey(chatMessages), hostedChatEnabled]);
 
   const submitGatherContext = async (answer?: string) => {
-    if (!requireHostedChatEnabled()) return;
     if (authoringMode) {
-      setGenerationInputNotice(AUTHORING_MODE_ACTIVE_MESSAGE);
+      if (selectedImage) {
+        setGenerationInputNotice("Image attachments are not available in OpenCode authoring yet.");
+        return;
+      }
+      const text = (answer ?? prompt).trim();
+      if (!text || !openCodeConnectorId) {
+        setGenerationInputNotice(openCodeConnectorId ? "Describe the hardware project you want OpenCode to author." : "OpenCode authoring is not configured for this deployment.");
+        return;
+      }
+      const requestChatId = activeChatId || newBuildChatId();
+      setActiveChatId(requestChatId);
+      rememberChatItem({ chatId: requestChatId, title: text, projectId: "", createdAt: chatTimestamp(), projectCount: 0 });
+      syncChatRoute(requestChatId);
+      const userMessageId = appendChatMessage({ id: newChatMessageId(), role: "user", content: text, status: "idle" });
+      appendThreadMessage(requestChatId, { id: userMessageId, role: "user", content: text, status: "idle" });
+      const assistantMessageId = appendChatMessage({ id: newChatMessageId(), role: "assistant", content: "Sending to OpenCode…", status: "loading" });
+      appendThreadMessage(requestChatId, { id: assistantMessageId, role: "assistant", content: "Sending to OpenCode…", status: "loading" });
+      setPrompt("");
+      setGenerationInputNotice(null);
+      void submitOpenCodeTurn({ chatId: requestChatId, message: text, assistantMessageId });
       return;
     }
+    if (!requireHostedChatEnabled()) return;
     if (contextSubmitting || activeGenerationRef.current) return;
     if (!(await requireSignedInForGeneration())) return;
 
@@ -4396,30 +4437,59 @@ export function FormaWorkspace({
 
   const handleProjectChatGenerate = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!requireHostedChatEnabled()) return;
     if (authoringMode) {
       const handoffProjectId = currentProjectId;
       const handoffMessage = projectChatInput.trim();
-      if (!handoffProjectId || !projectIR || !handoffMessage) return;
+      if (!handoffProjectId || !projectIR || !handoffMessage || !openCodeConnectorId) {
+        if (!openCodeConnectorId) setGenerationInputNotice("OpenCode authoring is not configured for this deployment.");
+        return;
+      }
       const sourceChatId = currentProjectChatId || activeChatId || newBuildChatId();
       setActiveChatId(sourceChatId);
-      appendThreadMessage(sourceChatId, {
+      const userMessageId = appendThreadMessage(sourceChatId, {
         role: "user",
         content: handoffMessage,
         status: "idle",
         projectId: handoffProjectId,
       });
-      appendThreadMessage(sourceChatId, {
+      const assistantMessageId = appendThreadMessage(sourceChatId, {
         role: "assistant",
-        content: AUTHORING_MODE_HANDOFF_MESSAGE,
-        status: "handed-off",
+        content: "Sending to OpenCode…",
+        status: "loading",
         projectId: handoffProjectId,
       });
       setProjectChatInput("");
       setGenerationInputNotice(null);
-      checkServerStatus();
+      if (sourceChatId === activeChatId) {
+        setChatMessages((current) => [
+          ...current,
+          {
+            id: userMessageId,
+            role: "user",
+            content: handoffMessage,
+            status: "idle",
+            projectId: handoffProjectId,
+            timestamp: chatTimestamp(),
+          },
+          {
+            id: assistantMessageId,
+            role: "assistant",
+            content: "Sending to OpenCode…",
+            status: "loading",
+            projectId: handoffProjectId,
+            timestamp: chatTimestamp(),
+          },
+        ]);
+      }
+      void submitOpenCodeTurn({
+        chatId: sourceChatId,
+        message: handoffMessage,
+        projectId: handoffProjectId,
+        assistantMessageId,
+      });
       return;
     }
+    if (!requireHostedChatEnabled()) return;
     if (activeGenerationRef.current) return;
     if (!(await requireSignedInForGeneration())) return;
     if (!currentUserOwnsProject) {
@@ -4654,6 +4724,144 @@ export function FormaWorkspace({
       if (!signal?.aborted) {
         setIsLoading(false);
       }
+    }
+  };
+
+  const openCodeEventPatch = (event: OpenCodeEvent): Partial<ChatMessage> => {
+    if (event.kind === "assistant_message" && event.message) {
+      return { content: event.message, status: "loading" };
+    }
+    if (event.kind === "completed") {
+      return {
+        content: "OpenCode finished authoring this project.",
+        status: "success",
+        projectId: event.project_id,
+      };
+    }
+    if (event.kind === "failed") {
+      return {
+        content: event.error?.message || "OpenCode could not complete this project change.",
+        status: "error",
+        projectId: event.project_id,
+      };
+    }
+    if (event.kind === "cancelled") {
+      return { content: "OpenCode authoring was stopped.", status: "cancelled", projectId: event.project_id };
+    }
+    if (event.kind === "connector_unavailable") {
+      return { content: "The local OpenCode connector is unavailable. Start it and try again.", status: "error" };
+    }
+    if (event.kind === "validating") return { content: "OpenCode is validating the project.", status: "loading" };
+    if (event.kind === "working" || event.kind === "progress" || event.kind === "queued") {
+      return { content: "OpenCode is authoring this project.", status: "loading" };
+    }
+    return {};
+  };
+
+  const pollOpenCodeTurn = (turn: {
+    chatId: string;
+    sessionId: string;
+    assistantMessageId: string;
+    run: ActiveGenerationRun;
+  }) => {
+    const poll = async () => {
+      if (turn.run.cancelled || turn.run.controller.signal.aborted) return;
+      try {
+        const page = await listOpenCodeEvents(
+          API_URL,
+          await generationRequestHeaders(),
+          turn.sessionId,
+          openCodeCursorsRef.current[turn.sessionId] || 0,
+        );
+        openCodeCursorsRef.current[turn.sessionId] = page.next_cursor;
+        let terminalEvent: OpenCodeEvent | null = null;
+        for (const event of page.events) {
+          if (event.session_id !== turn.sessionId) continue;
+          const patch = openCodeEventPatch(event);
+          updateThreadMessage(turn.chatId, turn.assistantMessageId, patch);
+          if (activeChatId === turn.chatId) updateChatMessage(turn.assistantMessageId, patch);
+          if (["completed", "failed", "cancelled", "connector_unavailable"].includes(event.kind)) terminalEvent = event;
+        }
+        if (terminalEvent) {
+          delete openCodePollTimersRef.current[turn.sessionId];
+          if (terminalEvent.kind === "cancelled") delete openCodeSessionsRef.current[turn.chatId];
+          if (terminalEvent.kind === "completed") {
+            rememberChatItem({
+              chatId: turn.chatId,
+              title: projectTitle || "OpenCode project",
+              projectId: terminalEvent.project_id,
+              createdAt: chatTimestamp(),
+              projectCount: 1,
+            });
+            void loadOldProject(terminalEvent.project_id, { syncRoute: false, tab: "chat", hydrateChat: true });
+            refreshProjectAndChatLists();
+          }
+          finishGenerationRun(turn.run);
+          return;
+        }
+        openCodePollTimersRef.current[turn.sessionId] = window.setTimeout(poll, 1500);
+      } catch (error) {
+        if (turn.run.cancelled || turn.run.controller.signal.aborted) return;
+        setGenerationInputNotice(error instanceof Error ? error.message : "OpenCode events could not be loaded.");
+        openCodePollTimersRef.current[turn.sessionId] = window.setTimeout(poll, 3000);
+      }
+    };
+    void poll();
+  };
+
+  const submitOpenCodeTurn = async ({
+    chatId,
+    message,
+    projectId,
+    assistantMessageId,
+  }: {
+    chatId: string;
+    message: string;
+    projectId?: string | null;
+    assistantMessageId: string;
+  }) => {
+    if (!openCodeConnectorId) {
+      const error = "OpenCode authoring is not configured for this deployment.";
+      updateChatMessage(assistantMessageId, { content: error, status: "error" });
+      updateThreadMessage(chatId, assistantMessageId, { content: error, status: "error" });
+      setGenerationInputNotice(error);
+      return;
+    }
+    const run = beginGenerationRun(projectId ? "project-chat" : "chat", chatId);
+    run.assistantMessageId = assistantMessageId;
+    try {
+      const headers = await generationRequestHeaders();
+      let session = openCodeSessionsRef.current[chatId];
+      let sessionProjectId = projectId || null;
+      if (!session) {
+        const created = await createOpenCodeSession(API_URL, headers, openCodeConnectorId, projectId);
+        session = created.session_id;
+        sessionProjectId = created.project_id;
+        openCodeSessionsRef.current[chatId] = session;
+        openCodeCursorsRef.current[session] = 0;
+        run.openCodeSessionId = session;
+        contextProjectIdsRef.current[chatId] = created.project_id;
+        rememberChatItem({
+          chatId,
+          title: projectTitle || message,
+          projectId: created.project_id,
+          createdAt: chatTimestamp(),
+          projectCount: 1,
+        });
+      }
+      run.projectId = sessionProjectId;
+      run.openCodeSessionId = session;
+      const command = await submitOpenCodeCommand(API_URL, headers, session, message);
+      run.jobId = command.command_id;
+      setActiveGeneration({ kind: run.kind, jobId: command.command_id });
+      setGenerationInputNotice("Sent to OpenCode. Live authoring status will appear here.");
+      pollOpenCodeTurn({ chatId, sessionId: session, assistantMessageId, run });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "OpenCode could not accept this request.";
+      updateChatMessage(assistantMessageId, { content: messageText, status: "error" });
+      updateThreadMessage(chatId, assistantMessageId, { content: messageText, status: "error" });
+      finishGenerationRun(run);
+      setGenerationInputNotice(messageText);
     }
   };
 
@@ -5356,7 +5564,7 @@ export function FormaWorkspace({
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
             newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5379,7 +5587,7 @@ export function FormaWorkspace({
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
             newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5428,9 +5636,9 @@ export function FormaWorkspace({
             chats={chatListItems}
             activeChatId={null}
             onNewChat={startNewProjectChat}
-            newChatDisabled={newChatDisabled}
-            newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             newChatDisabled={newChatDisabled}
+             newChatDisabledReason={chatUnavailableReason}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5451,9 +5659,9 @@ export function FormaWorkspace({
             chats={chatListItems}
             activeChatId={null}
             onNewChat={startNewProjectChat}
-            newChatDisabled={newChatDisabled}
-            newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             newChatDisabled={newChatDisabled}
+             newChatDisabledReason={chatUnavailableReason}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5502,11 +5710,11 @@ export function FormaWorkspace({
             onToggle={() => setSidebarCollapsed((value) => !value)}
             onHome={goHome}
             chats={chatListItems}
-            activeChatId={activeChatId}
+             activeChatId={activeChatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
             newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5525,11 +5733,11 @@ export function FormaWorkspace({
             onToggle={() => setSidebarCollapsed((value) => !value)}
             onHome={goHome}
             chats={chatListItems}
-            activeChatId={activeChatId}
+             activeChatId={activeChatId}
             onNewChat={startNewProjectChat}
             newChatDisabled={newChatDisabled}
             newChatDisabledReason={chatUnavailableReason}
-            readOnly={hostedChatReadOnly}
+             readOnly={chatReadOnly || authoringMode}
             onOpenChat={openChatItem}
             onRenameChat={renameSidebarChat}
             onPinChat={togglePinnedChat}
@@ -5564,7 +5772,7 @@ export function FormaWorkspace({
               title={(
                 <EditableWorkspaceTitle
                   value={activeSidebarChatItem?.title || NEW_PROJECT_TITLE}
-                  canEdit={hostedChatEnabled}
+                   canEdit={hostedChatEnabled && !authoringMode}
                   label="Chat title"
                   onCommit={(title) => {
                     if (activeChatId) {
@@ -5694,14 +5902,14 @@ export function FormaWorkspace({
           ) : (
             <HomeChatView
               started={activeSidebarChatStarted}
-              readOnly={hostedChatReadOnly}
+              readOnly={chatReadOnly}
               authoringActive={authoringMode}
               conversationKey={activeChatId || "new-chat"}
               workspaceTitle={
                 activeSidebarChatStarted ? (
                   <EditableWorkspaceTitle
                     value={activeSidebarChatItem?.title || NEW_PROJECT_TITLE}
-                    canEdit={hostedChatEnabled}
+                     canEdit={hostedChatEnabled && !authoringMode}
                     label="Chat title"
                     onCommit={(title) => {
                       if (activeChatId) {
@@ -5722,8 +5930,8 @@ export function FormaWorkspace({
                     <ChatProjectArtifact
                       projectId={currentProjectId}
                       projectTitle={projectTitle}
-                      canEdit={hostedChatEnabled && currentUserOwnsProject}
-                      onRenameTitle={hostedChatEnabled && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
+                       canEdit={hostedChatEnabled && !authoringMode && currentUserOwnsProject}
+                       onRenameTitle={hostedChatEnabled && !authoringMode && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
                       namespaceTabs={visibleWorkspaceTabs}
                       activeNamespace={activeWorkspaceTab.id}
                       onNamespaceChange={setActiveTab}
@@ -5752,7 +5960,7 @@ export function FormaWorkspace({
               onSelectContextSuggestion={(suggestion) => {
                 void submitGatherContext(suggestion);
               }}
-              isLoading={hostedChatEnabled && (contextSubmitting || Boolean(activeGeneration || pendingContextBuildMessage || resettingBuildMessageId))}
+               isLoading={(hostedChatEnabled || authoringMode) && (contextSubmitting || Boolean(activeGeneration || pendingContextBuildMessage || resettingBuildMessageId))}
               generationReady
               needsGenerationProvider={false}
               needsImageProvider={false}
@@ -5764,7 +5972,7 @@ export function FormaWorkspace({
                 setGenerationInputNotice(null);
                 setPrompt(value);
               }}
-              generationActive={hostedChatEnabled && Boolean(activeGeneration || pendingContextBuildMessage)}
+               generationActive={(hostedChatEnabled || authoringMode) && Boolean(activeGeneration || pendingContextBuildMessage)}
               onStop={() => {
                 if (activeGenerationRef.current) stopActiveGeneration();
                 else if (pendingContextBuildMessage) stopContextBuildMessage(pendingContextBuildMessage);
@@ -5810,11 +6018,11 @@ export function FormaWorkspace({
           onToggle={() => setSidebarCollapsed((value) => !value)}
           onHome={goHome}
           chats={chatListItems}
-          activeChatId={activeSidebarChatId}
+           activeChatId={activeSidebarChatId}
           onNewChat={startNewProjectChat}
           newChatDisabled={newChatDisabled}
           newChatDisabledReason={chatUnavailableReason}
-          readOnly={hostedChatReadOnly}
+                 readOnly={hostedChatReadOnly || authoringMode}
           onOpenChat={openChatItem}
           onRenameChat={renameSidebarChat}
           onPinChat={togglePinnedChat}
@@ -5837,7 +6045,7 @@ export function FormaWorkspace({
           onNewChat={startNewProjectChat}
           newChatDisabled={newChatDisabled}
           newChatDisabledReason={chatUnavailableReason}
-          readOnly={hostedChatReadOnly}
+           readOnly={chatReadOnly || authoringMode}
           onOpenChat={openChatItem}
           onRenameChat={renameSidebarChat}
           onPinChat={togglePinnedChat}
@@ -5867,8 +6075,8 @@ export function FormaWorkspace({
                 projectId={currentProjectId}
                 projectTitle={projectTitle}
                 owned={currentUserOwnsProject}
-                readOnly={hostedChatReadOnly}
-                onRenameTitle={hostedChatEnabled && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
+                readOnly={hostedChatReadOnly || authoringMode}
+                 onRenameTitle={hostedChatEnabled && !authoringMode && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
                 namespaceTabs={visibleWorkspaceTabs}
                 activeNamespace={activeWorkspaceTab.id}
                 onNamespaceChange={setActiveTab}
@@ -5880,22 +6088,22 @@ export function FormaWorkspace({
                 projectId={currentProjectId}
                 chatId={currentProjectChatId}
                 projectTitle={projectTitle}
-                onRenameTitle={hostedChatEnabled && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
+                 onRenameTitle={hostedChatEnabled && !authoringMode && currentUserOwnsProject ? (title) => { void commitOwnedWorkspaceTitle(title); } : undefined}
                 messages={currentProjectChatMessages}
                 renderPipelineProgress={renderConversationPipelineProgress}
                 input={projectChatInput}
                 setInput={setProjectChatInput}
                 onSubmit={handleProjectChatGenerate}
-                isLoading={hostedChatEnabled && isLoading}
-                canStop={hostedChatEnabled && activeGeneration?.kind === "project-chat"}
+                 isLoading={(hostedChatEnabled || authoringMode) && isLoading}
+                 canStop={(hostedChatEnabled || authoringMode) && activeGeneration?.kind === "project-chat"}
                 onStop={stopActiveGeneration}
                 canRetryFailedBuild={hostedChatEnabled && Boolean(retryableProjectBuildMessage)}
                 retryingFailedBuild={hostedChatEnabled && resettingBuildMessageId === retryableProjectBuildMessage?.id}
                 onRetryFailedBuild={() => {
                   if (retryableProjectBuildMessage) void resetFailedContextBuild(retryableProjectBuildMessage);
                 }}
-                canChat={hostedChatEnabled && currentUserOwnsProject}
-                readOnly={hostedChatReadOnly}
+                 canChat={(hostedChatEnabled || authoringMode) && currentUserOwnsProject}
+                 readOnly={chatReadOnly}
                 authoringActive={authoringMode}
                 namespaceTabs={visibleWorkspaceTabs}
                 activeNamespace={activeWorkspaceTab.id}
@@ -7356,8 +7564,9 @@ function ChatWorkspace({
                   messages={messages}
                   renderPipelineProgress={renderPipelineProgress}
                   variant="project"
-                  emptyMessage="This chat has no project messages yet."
-                  isLoading={readOnly ? false : isLoading}
+                   emptyMessage="This chat has no project messages yet."
+                   isLoading={readOnly ? false : isLoading}
+                   assistantLabel={authoringActive ? "OpenCode" : "Forma"}
                 />
                 <div ref={endRef} />
                 <ChatProjectArtifact

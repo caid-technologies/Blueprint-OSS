@@ -171,21 +171,22 @@ def deployment_runtime_config(
     state = runtime_state()
     deployment_enabled = state["deployment_mode"] == "hosted"
     live_generation_enabled = bool(llm_config.get("live_generation_enabled"))
-    config = {
+    contract = {
         "enabled": deployment_enabled,
         "mode": state["deployment_mode"],
         "development_mode": state["development_mode"],
         "hosted_chat_enabled": hosted_chat_enabled(),
         "authoring_mode_enabled": authoring_mode_enabled(),
+        "opencode_connector_id": (config.get("FORMA_OPENCODE_CONNECTOR_ID") or "").strip() or None,
         "alpha_generation_gate_active": deployment_enabled and not live_generation_enabled,
         "generation_available": (not deployment_enabled) or live_generation_enabled,
     }
     if signup_storage:
-        config["signup_storage"] = signup_storage
+        contract["signup_storage"] = signup_storage
     reason = generation_unavailable_reason(llm_config)
     if reason:
-        config["generation_unavailable_reason"] = reason
-    return config
+        contract["generation_unavailable_reason"] = reason
+    return contract
 
 
 def _runtime_value(llm_config: Dict[str, Any], key: str) -> Any:

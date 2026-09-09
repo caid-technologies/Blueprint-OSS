@@ -1440,6 +1440,15 @@ def get_latest_project_revision(project_id: str, owner_user_id: str) -> ProjectR
     return ProjectStateService(_DATABASE_REPOSITORY).get_latest(project_id, owner_user_id)
 
 
+def get_project_revision_by_source_job(
+    project_id: str,
+    owner_user_id: str,
+    source_job_id: str,
+) -> Optional[ProjectRevision]:
+    """Return an existing revision for an idempotent worker/source delivery."""
+    return ProjectStateService(_DATABASE_REPOSITORY).get_by_source_job(project_id, owner_user_id, source_job_id)
+
+
 def list_latest_project_revisions(owner_user_id: str) -> List[ProjectRevision]:
     """List each owned project's latest immutable canonical revision."""
 

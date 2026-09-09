@@ -4,6 +4,7 @@ from typing import Tuple
 
 from forma_core.jobs.schema import JOB_TABLE_CONTRACT
 from forma_core.persistence.base import TableContract
+from forma_core.opencode.schema import OPENCODE_TABLE_CONTRACTS
 
 # This is the schema surface used through both the local SQLite provider and
 # the hosted Supabase provider. A Supabase startup projection checks columns as
@@ -146,6 +147,7 @@ APPLICATION_SCHEMA: Tuple[TableContract, ...] = (
         ("id", "chat_id", "owner_user_id", "title", "messages", "created_at", "updated_at"),
     ),
     JOB_TABLE_CONTRACT,
+    *OPENCODE_TABLE_CONTRACTS,
     TableContract(
         "alpha_signups",
         ("id", "name", "email", "organization", "additional_info", "source", "metadata_json", "created_at"),

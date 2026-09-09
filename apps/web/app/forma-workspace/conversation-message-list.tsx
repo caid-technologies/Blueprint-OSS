@@ -46,6 +46,7 @@ export default function ConversationMessageList({
   canBuildNow = false,
   buildNowLoading = false,
   onBuildNow,
+  assistantLabel = "Forma",
 }: {
   messages: ConversationMessage[];
   renderPipelineProgress: (message: ConversationMessage) => ReactNode;
@@ -56,6 +57,7 @@ export default function ConversationMessageList({
   canBuildNow?: boolean;
   buildNowLoading?: boolean;
   onBuildNow?: () => void;
+  assistantLabel?: string;
 }) {
   const latestChoiceMessageId = onSelectContextSuggestion
     ? [...messages]
@@ -110,7 +112,7 @@ export default function ConversationMessageList({
             ) : (
               <Cpu className="h-3.5 w-3.5 text-zinc-400" />
             )}
-            <span>{isUser ? "You" : isSystem ? "Context" : "Forma"}</span>
+            <span>{isUser ? "You" : isSystem ? "Context" : assistantLabel}</span>
             <span className="text-zinc-700">·</span>
             <span suppressHydrationWarning>{formatTimestamp(message.timestamp)}</span>
             <CopyButton

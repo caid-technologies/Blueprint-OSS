@@ -34,6 +34,11 @@ class SQLiteProvider(DatabaseProvider):
 
     def initialize(self) -> None:
         from forma_core.jobs.persistence import DBA2AJob  # noqa: F401
+        from forma_core.opencode.persistence import (  # noqa: F401
+            DBOpenCodeCommand,
+            DBOpenCodeEvent,
+            DBOpenCodeSession,
+        )
         from forma_core.persistence.migrations import migrate_sqlite_schema
         from forma_core.persistence.models import Base
 
