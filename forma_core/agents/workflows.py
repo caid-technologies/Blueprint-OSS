@@ -13,6 +13,7 @@ from forma_core.jobs.source_usage import (
 )
 from forma_core.workspaces.projects.cad_generation import ensure_native_cad_model
 from forma_core.workspaces.projects.models import HardwareIR
+from forma_core.user_integrations import ResolvedIntegrationSettings
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def get_workflow_debug_config(
     provider_name: Optional[str] = None,
     model_name: Optional[str] = None,
     external_source_provider: Optional[str] = None,
+    settings: Optional[ResolvedIntegrationSettings] = None,
 ) -> Dict[str, Any]:
     normalized = normalize_workflow_id(workflow_id)
     if normalized == WEB_RESEARCH_WORKFLOW_ID:
@@ -65,9 +67,10 @@ def get_workflow_debug_config(
             provider_name=provider_name,
             model_name=model_name,
             external_source_provider=external_source_provider,
+            settings=settings,
         ).get_debug_config()
     return {
-        **HardwarePipelineOrchestrator(provider_name=provider_name, model_name=model_name).get_debug_config(),
+        **HardwarePipelineOrchestrator(provider_name=provider_name, model_name=model_name, settings=settings).get_debug_config(),
         "workflow": DEFAULT_WORKFLOW_ID,
     }
 
@@ -81,6 +84,7 @@ def generate_project_with_workflow(
     provider_name: Optional[str] = None,
     model_name: Optional[str] = None,
     external_source_provider: Optional[str] = None,
+    settings: Optional[ResolvedIntegrationSettings] = None,
     generation_metadata: Optional[Dict[str, Any]] = None,
     persist_project: bool = True,
 ) -> HardwareIR:
@@ -91,6 +95,7 @@ def generate_project_with_workflow(
             provider_name=provider_name,
             model_name=model_name,
             external_source_provider=external_source_provider,
+            settings=settings,
             persist_project=persist_project,
         ).generate_project(
             prompt,
@@ -103,6 +108,7 @@ def generate_project_with_workflow(
             provider_name=provider_name,
             model_name=model_name,
             persist_project=persist_project,
+            settings=settings,
         ).generate_project(
             prompt,
             image_bytes=image_bytes,

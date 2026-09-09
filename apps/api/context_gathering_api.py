@@ -23,7 +23,7 @@ from forma_core.database import (
     upsert_project_chat,
 )
 from forma_core.llm import build_llm_provider
-from forma_core.user_integrations import UserIntegrationStore, apply_user_integrations_to_environment
+from forma_core.user_integrations import UserIntegrationStore, resolve_user_integration_settings
 from forma_core.workspaces.context import (
     ContextBuildExecution,
     ContextGatheringRequest,
@@ -94,10 +94,10 @@ def context_gathering_agent(
     user: UserContext = Depends(require_user_context),
 ) -> ContextGatheringAgent:
     if user.owner_user_id:
-        apply_user_integrations_to_environment(UserIntegrationStore.for_user(user.owner_user_id))
+        settings = resolve_user_integration_settings(UserIntegrationStore.for_user(user.owner_user_id))
     else:
-        apply_user_integrations_to_environment()
-    return ContextGatheringAgent(llm_provider=build_llm_provider())
+        settings = resolve_user_integration_settings()
+    return ContextGatheringAgent(llm_provider=build_llm_provider(settings=settings))
 
 
 @router.post("/messages", response_model=ContextGatheringResponse, status_code=status.HTTP_201_CREATED)

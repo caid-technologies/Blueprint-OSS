@@ -78,7 +78,7 @@ from forma_core.runtime import (
     ensure_hosted_chat_enabled,
     generation_unavailable_message,
 )
-from forma_core.user_integrations import UserIntegrationStore, apply_user_integrations_to_environment, default_integration_store
+from forma_core.user_integrations import UserIntegrationStore, default_integration_store, resolve_user_integration_settings, ResolvedIntegrationSettings
 from apps.api.storage import get_image_storage_config, upload_image_to_supabase_s3
 from apps.api.security import MAX_IMAGE_ENCODED_CHARS, consume_operation_limit, security_config, validate_image_limits
 from forma_core.utils import generate_mermaid_chart, generate_svg_schematic
@@ -510,8 +510,8 @@ def _safe_image_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return safe
 
 
-def _attach_product_image(prompt_text: str, ir: Any, generate_image: bool = False) -> None:
-    image_provider = build_image_provider(force_enabled=generate_image)
+def _attach_product_image(prompt_text: str, ir: Any, generate_image: bool = False, settings: Optional[ResolvedIntegrationSettings] = None) -> None:
+    image_provider = build_image_provider(force_enabled=generate_image, settings=settings)
     image_config = _safe_image_config(image_provider.get_debug_config())
     visual_spec = build_project_visual_spec(prompt_text, ir)
     image_status = "pending" if generate_image else "not_requested"
@@ -892,12 +892,17 @@ def _persist_updated_project_ir(
         logger.warning("Failed to persist updated project metadata for %s: %s", project_id, exc)
 
 
-def _apply_owner_user_integrations(owner_user_id: Optional[str]) -> None:
+def _resolve_owner_user_integrations(owner_user_id: Optional[str]) -> ResolvedIntegrationSettings:
     if not clerk_auth_required():
-        apply_user_integrations_to_environment(default_integration_store())
-        return
+        return resolve_user_integration_settings(default_integration_store())
     if isinstance(owner_user_id, str) and owner_user_id.strip():
-        apply_user_integrations_to_environment(UserIntegrationStore.for_user(owner_user_id.strip()))
+        return resolve_user_integration_settings(UserIntegrationStore.for_user(owner_user_id.strip()))
+    return resolve_user_integration_settings()
+
+
+def _apply_owner_user_integrations(owner_user_id: Optional[str]) -> ResolvedIntegrationSettings:
+    """Compatibility shim for callers that previously requested environment mutation."""
+    return _resolve_owner_user_integrations(owner_user_id)
 
 
 def _context_owner_user_id(user_context: Optional[UserContext]) -> Optional[str]:
@@ -945,9 +950,10 @@ def build_generation_response(
     past_job_context: Optional[PastJobContext] = None,
     project_id: Optional[str] = None,
     retry_stage: Optional[str] = None,
+    settings: Optional[ResolvedIntegrationSettings] = None,
 ) -> Dict[str, Any]:
     ensure_hosted_chat_enabled()
-    _apply_owner_user_integrations(owner_user_id)
+    settings = settings or _resolve_owner_user_integrations(owner_user_id)
 
     prompt_text = (prompt or "").strip()
     try:
@@ -1021,6 +1027,7 @@ def build_generation_response(
         provider_name=provider,
         model_name=model,
         external_source_provider=external_source_provider,
+        settings=settings,
     )
     if deployment_runtime_config(llm_config)["alpha_generation_gate_active"]:
         raise AlphaGenerationUnavailableError(generation_unavailable_message(llm_config))
@@ -1070,6 +1077,7 @@ def build_generation_response(
                 provider_name=provider,
                 model_name=model,
                 external_source_provider=external_source_provider,
+                settings=settings,
                 generation_metadata={
                     "project_id": project_id,
                     "chat_id": chat_id,
@@ -1130,8 +1138,7 @@ def build_generation_response(
 
             if generate_image:
                 emit_agent_pipeline_event(workflow_id, "image_generation", "started")
-                _apply_owner_user_integrations(owner_user_id)
-            _attach_product_image(prompt_text, ir, generate_image=generate_image)
+            _attach_product_image(prompt_text, ir, generate_image=generate_image, settings=settings)
             if generate_image:
                 image_status = (ir.assembly_metadata or {}).get("image_output_status")
                 emit_agent_pipeline_event(
@@ -1219,7 +1226,7 @@ async def call_forma_action(
             require_workflow=normalized == "generate_project",
         )
 
-    _apply_owner_user_integrations(owner_user_id if isinstance(owner_user_id, str) else None)
+    settings = _resolve_owner_user_integrations(owner_user_id if isinstance(owner_user_id, str) else None)
 
     if normalized == "generate_project":
         data_sources = normalize_generation_data_sources(payload.get("data_sources") or [])
@@ -1254,16 +1261,18 @@ async def call_forma_action(
             past_job_context,
             payload.get("project_id"),
             payload.get("retry_stage"),
+            settings=settings,
         )
 
     if normalized == "debug_config":
         orchestrator = HardwarePipelineOrchestrator(
             provider_name=payload.get("provider"),
             model_name=payload.get("model"),
+            settings=settings,
         )
         return {
             **orchestrator.get_debug_config(),
-            "image_output": get_image_output_debug_config(),
+            "image_output": get_image_output_debug_config(settings=settings),
             "image_storage": get_image_storage_config(),
             "observability": get_langfuse_debug_config(),
             "workflows": list_workflows(),

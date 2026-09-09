@@ -62,6 +62,7 @@ from forma_core.runtime import (
     deployment_mode_enabled,
     generation_unavailable_message,
 )
+from forma_core.user_integrations import ResolvedIntegrationSettings
 from forma_core.validation import (
     build_validation_summary,
     check_safety_violations,
@@ -150,19 +151,22 @@ class WebResearchHardwarePipeline:
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
         runtime_config: Optional[LLMRuntimeConfig] = None,
+        settings: Optional[ResolvedIntegrationSettings] = None,
         external_source_provider: Optional[str] = None,
         persist_project: bool = True,
     ):
+        self.settings = settings
         self.runtime_config = runtime_config or resolve_llm_runtime_config(
             provider_name=provider_name,
             model_name=model_name,
+            settings=settings,
         )
-        self.llm_provider = build_llm_provider(runtime_config=self.runtime_config)
+        self.llm_provider = build_llm_provider(runtime_config=self.runtime_config, settings=settings)
         self.use_simulation = not self.llm_provider.is_configured
         self.model_name = self.llm_provider.model_name
         self.external_source_provider = external_source_provider
         self.persist_project = persist_project
-        self.research_client = build_external_source_provider(provider=external_source_provider)
+        self.research_client = build_external_source_provider(provider=external_source_provider, settings=settings)
         self._active_generation_metadata: Dict[str, Any] = {}
 
     def get_debug_config(self) -> Dict[str, Any]:
@@ -286,7 +290,7 @@ class WebResearchHardwarePipeline:
         if safety_error:
             emit_agent_pipeline_event(self.workflow_id, "safety_guardrail", "failed", details={"reason": safety_error})
             logger.info("Web research workflow safety guardrail blocked request; delegating to safety response.")
-            return HardwarePipelineOrchestrator(runtime_config=self.runtime_config).generate_project(
+            return HardwarePipelineOrchestrator(runtime_config=self.runtime_config, settings=self.settings).generate_project(
                 user_prompt,
                 image_bytes=image_bytes,
                 image_mime_type=image_mime_type,
@@ -298,7 +302,7 @@ class WebResearchHardwarePipeline:
                 raise AlphaGenerationUnavailableError(generation_unavailable_message(self.get_debug_config()))
             logger.info("Web research workflow is using simulation fallback because external generation is unavailable.")
             emit_agent_pipeline_event(self.workflow_id, "external_research", "skipped", details={"reason": self.research_client.config.reason})
-            ir = HardwarePipelineOrchestrator(use_simulation=True, runtime_config=self.runtime_config).generate_project(
+            ir = HardwarePipelineOrchestrator(use_simulation=True, runtime_config=self.runtime_config, settings=self.settings).generate_project(
                 user_prompt,
                 image_bytes=image_bytes,
                 image_mime_type=image_mime_type,

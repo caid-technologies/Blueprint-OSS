@@ -169,7 +169,7 @@ class UserIntegrationsApiAuthTests(unittest.TestCase):
         request = ImageModelTestRequest(provider="gmi", model="seedream-5.0-pro", prompt="  test render  ")
         with patch.dict(os.environ, {}, clear=True), patch(
             "apps.api.user_integrations_api._store_for_context", return_value=object()
-        ), patch("apps.api.user_integrations_api.apply_user_integrations_to_environment"), patch(
+        ), patch("apps.api.user_integrations_api.resolve_user_integration_settings", return_value={}), patch(
             "apps.api.user_integrations_api.build_image_provider", return_value=provider
         ):
             response = run_image_model_test(request, HOSTED_CONTEXT)

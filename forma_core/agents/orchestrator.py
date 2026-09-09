@@ -53,6 +53,7 @@ from forma_core.runtime import (
     deployment_mode_enabled,
     generation_unavailable_message,
 )
+from forma_core.user_integrations import ResolvedIntegrationSettings
 from forma_core.workspaces.projects.models import (
     HardwareIR, ProjectOverview, FunctionalRequirements, 
     ComponentInstance, ConnectionNet, PinReference, AssemblyStep, 
@@ -656,13 +657,15 @@ class HardwarePipelineOrchestrator:
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
         runtime_config: Optional[LLMRuntimeConfig] = None,
+        settings: Optional[ResolvedIntegrationSettings] = None,
         persist_project: bool = True,
     ):
         self.runtime_config = runtime_config or resolve_llm_runtime_config(
             provider_name=provider_name,
             model_name=model_name,
+            settings=settings,
         )
-        self.llm_provider = build_llm_provider(runtime_config=self.runtime_config)
+        self.llm_provider = build_llm_provider(runtime_config=self.runtime_config, settings=settings)
         self.use_simulation = use_simulation or not self.llm_provider.is_configured
         self.model_name = self.llm_provider.model_name
         self.persist_project = persist_project
