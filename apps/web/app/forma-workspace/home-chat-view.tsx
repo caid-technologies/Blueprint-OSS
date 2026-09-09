@@ -164,6 +164,7 @@ export default function HomeChatView({
               renderPipelineProgress={renderPipelineProgress}
               onSelectContextSuggestion={readOnly ? undefined : onSelectContextSuggestion}
               isLoading={readOnly ? false : isLoading}
+              assistantLabel={authoringActive ? "OpenCode" : "Forma"}
               canBuildNow={readOnly ? false : canBuildNow}
               buildNowLoading={readOnly ? false : buildNowLoading}
               onBuildNow={readOnly ? undefined : onBuildNow}

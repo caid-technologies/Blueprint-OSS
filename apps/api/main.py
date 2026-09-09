@@ -166,6 +166,7 @@ from apps.api.cli_credentials_api import router as cli_credentials_router
 from apps.api.compatibility import require_client_compatibility
 from apps.api.version_api import router as version_router
 from apps.api.hosted_chat import require_hosted_chat_enabled
+from apps.api.opencode_api import router as opencode_router
 from apps.api.auth import (
     UserContext,
     require_a2a_admin_user_context,
@@ -365,6 +366,7 @@ app.include_router(cli_auth_router, dependencies=[Depends(require_client_compati
 app.include_router(cli_projects_router, dependencies=[Depends(require_client_compatibility)])
 app.include_router(cli_credentials_router, dependencies=[Depends(require_client_compatibility)])
 app.include_router(version_router)
+app.include_router(opencode_router)
 
 
 def _deployment_runtime_config(llm_config: Dict[str, Any]) -> Dict[str, Any]:

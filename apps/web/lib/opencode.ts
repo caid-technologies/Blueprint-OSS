@@ -1,0 +1,175 @@
+export type OpenCodeSession = {
+  session_id: string;
+  connector_id: string;
+  project_id: string;
+  owner_user_id: string;
+  status: "active" | "cancelled" | "completed";
+};
+
+export type OpenCodeCommand = {
+  command_id: string;
+  session_id: string;
+  project_id: string;
+  operation: "project_message" | "compile_project" | "validate_project";
+  status: "queued" | "leased" | "running" | "succeeded" | "failed" | "cancelled";
+};
+
+export type OpenCodeEvent = {
+  event_id: string;
+  sequence: number;
+  session_id: string;
+  project_id: string;
+  kind: "assistant_message" | "queued" | "working" | "validating" | "completed" | "failed" | "cancelled" | "connector_unavailable" | "progress";
+  status: OpenCodeCommand["status"] | null;
+  message: string | null;
+  revision_id: string | null;
+  error: { code: string; message: string; correlation_id: string } | null;
+  created_at: string;
+};
+
+type OpenCodeEventPage = {
+  events: OpenCodeEvent[];
+  next_cursor: number;
+};
+
+function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("OpenCode returned an invalid response.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringField(value: Record<string, unknown>, name: string): string {
+  if (typeof value[name] !== "string" || !value[name]) throw new Error("OpenCode returned an invalid response.");
+  return value[name];
+}
+
+function nullableStringField(value: Record<string, unknown>, name: string): string | null {
+  if (value[name] !== null && typeof value[name] !== "string") throw new Error("OpenCode returned an invalid response.");
+  return (value[name] as string | null | undefined) ?? null;
+}
+
+function parseSession(value: unknown): OpenCodeSession {
+  const item = record(value);
+  const status = stringField(item, "status");
+  if (status !== "active" && status !== "cancelled" && status !== "completed") throw new Error("OpenCode returned an invalid session status.");
+  return {
+    session_id: stringField(item, "session_id"),
+    connector_id: stringField(item, "connector_id"),
+    project_id: stringField(item, "project_id"),
+    owner_user_id: stringField(item, "owner_user_id"),
+    status,
+  };
+}
+
+function parseCommand(value: unknown): OpenCodeCommand {
+  const item = record(value);
+  const operation = stringField(item, "operation");
+  const status = stringField(item, "status");
+  if (!["project_message", "compile_project", "validate_project"].includes(operation)) throw new Error("OpenCode returned an invalid command operation.");
+  if (!["queued", "leased", "running", "succeeded", "failed", "cancelled"].includes(status)) throw new Error("OpenCode returned an invalid command status.");
+  return {
+    command_id: stringField(item, "command_id"),
+    session_id: stringField(item, "session_id"),
+    project_id: stringField(item, "project_id"),
+    operation: operation as OpenCodeCommand["operation"],
+    status: status as OpenCodeCommand["status"],
+  };
+}
+
+function parseEvent(value: unknown): OpenCodeEvent {
+  const item = record(value);
+  const kind = stringField(item, "kind");
+  if (!["assistant_message", "queued", "working", "validating", "completed", "failed", "cancelled", "connector_unavailable", "progress"].includes(kind)) {
+    throw new Error("OpenCode returned an invalid event kind.");
+  }
+  const status = item.status === null || item.status === undefined ? null : stringField(item, "status");
+  if (status !== null && !["queued", "leased", "running", "succeeded", "failed", "cancelled"].includes(status)) throw new Error("OpenCode returned an invalid event status.");
+  const errorValue = item.error === null || item.error === undefined ? null : record(item.error);
+  return {
+    event_id: stringField(item, "event_id"),
+    sequence: Number(item.sequence),
+    session_id: stringField(item, "session_id"),
+    project_id: stringField(item, "project_id"),
+    kind: kind as OpenCodeEvent["kind"],
+    status: status as OpenCodeEvent["status"],
+    message: nullableStringField(item, "message"),
+    revision_id: nullableStringField(item, "revision_id"),
+    error: errorValue
+      ? {
+          code: stringField(errorValue, "code"),
+          message: stringField(errorValue, "message"),
+          correlation_id: stringField(errorValue, "correlation_id"),
+        }
+      : null,
+    created_at: stringField(item, "created_at"),
+  };
+}
+
+async function responseJson(response: Response): Promise<unknown> {
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as unknown;
+    const detail = body && typeof body === "object" && body !== null && "detail" in body ? (body as { detail?: unknown }).detail : null;
+    const message = detail && typeof detail === "object" && detail !== null && "message" in detail
+      ? (detail as { message?: unknown }).message
+      : null;
+    throw new Error(typeof message === "string" ? message : "OpenCode request failed.");
+  }
+  return response.json();
+}
+
+export async function createOpenCodeSession(
+  apiUrl: string,
+  headers: Record<string, string>,
+  connectorId: string,
+  projectId?: string | null,
+): Promise<OpenCodeSession> {
+  const response = await fetch(`${apiUrl}/opencode/sessions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ connector_id: connectorId, ...(projectId ? { project_id: projectId } : {}) }),
+  });
+  return parseSession(await responseJson(response));
+}
+
+export async function submitOpenCodeCommand(
+  apiUrl: string,
+  headers: Record<string, string>,
+  sessionId: string,
+  message: string,
+): Promise<OpenCodeCommand> {
+  const response = await fetch(`${apiUrl}/opencode/sessions/${encodeURIComponent(sessionId)}/commands`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message, idempotency_key: `web-${crypto.randomUUID()}` }),
+  });
+  return parseCommand(await responseJson(response));
+}
+
+export async function listOpenCodeEvents(
+  apiUrl: string,
+  headers: Record<string, string>,
+  sessionId: string,
+  cursor: number,
+): Promise<OpenCodeEventPage> {
+  const response = await fetch(`${apiUrl}/opencode/sessions/${encodeURIComponent(sessionId)}/events?cursor=${cursor}&limit=100`, {
+    headers,
+    cache: "no-store",
+  });
+  const value = record(await responseJson(response));
+  const events = value.events;
+  if (!Array.isArray(events) || !Number.isInteger(Number(value.next_cursor))) throw new Error("OpenCode returned an invalid event page.");
+  return { events: events.map(parseEvent), next_cursor: Number(value.next_cursor) };
+}
+
+export async function cancelOpenCodeSession(
+  apiUrl: string,
+  headers: Record<string, string>,
+  sessionId: string,
+): Promise<void> {
+  const response = await fetch(`${apiUrl}/opencode/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+    method: "POST",
+    headers,
+  });
+  await responseJson(response);
+}

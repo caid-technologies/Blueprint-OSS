@@ -42,6 +42,7 @@ export type RuntimeConfigContract = {
   deployment?: {
     hosted_chat_enabled?: boolean;
     authoring_mode_enabled?: boolean;
+    opencode_connector_id?: string | null;
   };
   video?: {
     generation?: { configured?: boolean; reason?: string | null };
