@@ -35,6 +35,8 @@ class DBOpenCodeCommand(Base):
     idempotency_key = Column(String, nullable=False)
     status = Column(String, index=True, nullable=False)
     message_digest = Column(String, nullable=False)
+    message_ciphertext = Column(Text, nullable=True)
+    message_key_id = Column(String, nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0)
     lease_expires_at = Column(String, nullable=True)
     lease_token_hash = Column(String, nullable=True)

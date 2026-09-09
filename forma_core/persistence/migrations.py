@@ -113,6 +113,15 @@ def migrate_sqlite_schema(engine: Engine, *, import_legacy_jobs: bool = True) ->
             text("CREATE INDEX IF NOT EXISTS ix_project_revisions_project_revision "
                  "ON project_revisions (project_id, revision DESC)")
         )
+        opencode_columns = {
+            row[1]
+            for row in connection.exec_driver_sql("PRAGMA table_info(opencode_commands)").fetchall()
+        }
+        if opencode_columns:
+            if "message_ciphertext" not in opencode_columns:
+                connection.execute(text("ALTER TABLE opencode_commands ADD COLUMN message_ciphertext TEXT"))
+            if "message_key_id" not in opencode_columns:
+                connection.execute(text("ALTER TABLE opencode_commands ADD COLUMN message_key_id VARCHAR"))
         connection.exec_driver_sql("DROP VIEW IF EXISTS project_gallery_inventory")
         connection.exec_driver_sql(
             """

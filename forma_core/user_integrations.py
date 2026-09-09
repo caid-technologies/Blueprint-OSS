@@ -8,6 +8,7 @@ from forma_core.config import config as env_config
 import re
 import hashlib
 import base64
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1210,6 +1211,25 @@ def _decrypt_config(token: str) -> UserIntegrationConfig:
     return _decrypt_config_with_secret(token, _integration_encryption_secret())
 
 
+def encrypt_user_secret_text(value: str) -> tuple[str, str]:
+    """Encrypt short server-only payloads with the configured user secret key."""
+    secret = _integration_encryption_secret()
+    token = _fernet_for_secret(secret).encrypt(value.encode("utf-8"))
+    return token.decode("ascii"), _integration_encryption_key_id(secret)
+
+
+def decrypt_user_secret_text(token: str, key_id: str) -> str:
+    """Decrypt a payload and reject values encrypted with another configured key."""
+    secret = _integration_encryption_secret()
+    if not secrets.compare_digest(key_id, _integration_encryption_key_id(secret)):
+        raise RuntimeError("Stored secret text was encrypted with a different FORMA_USER_SECRETS_KEY.")
+    try:
+        plaintext = _fernet_for_secret(secret).decrypt(token.encode("ascii"))
+    except InvalidToken as exc:
+        raise RuntimeError("Stored secret text could not be decrypted with the configured key.") from exc
+    return plaintext.decode("utf-8")
+
+
 class EncryptedFileIntegrationStore(UserIntegrationStore):
     """Fernet-encrypted file storage for local workspace or user settings."""
 
@@ -2042,6 +2062,8 @@ __all__ = [
     "integration_status_payload",
     "list_integration_definitions",
     "mask_secret",
+    "encrypt_user_secret_text",
+    "decrypt_user_secret_text",
     "require_user_secrets_key",
     "user_integrations_path_for_user",
 ]

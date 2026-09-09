@@ -20,6 +20,7 @@ from forma_core.opencode.models import (
     PublicEvent,
 )
 from forma_core.persistence.providers import SQLiteProvider, SupabaseProvider, create_sqlite_provider
+from forma_core.user_integrations import decrypt_user_secret_text, encrypt_user_secret_text
 
 
 def _now() -> datetime:
@@ -80,6 +81,8 @@ class StoredCommand:
     idempotency_key: str
     status: OpenCodeCommandStatus
     message_digest: str
+    message_ciphertext: str | None
+    message_key_id: str | None
     attempt_count: int
     lease_expires_at: str | None
     lease_token_hash: str | None
@@ -98,6 +101,8 @@ class StoredCommand:
             "idempotency_key": self.idempotency_key,
             "status": self.status.value,
             "message_digest": self.message_digest,
+            "message_ciphertext": self.message_ciphertext,
+            "message_key_id": self.message_key_id,
             "attempt_count": self.attempt_count,
             "lease_expires_at": self.lease_expires_at,
             "lease_token_hash": self.lease_token_hash,
@@ -116,7 +121,6 @@ class OpenCodeStore:
         self._db_path = db_path
         self._lock = threading.RLock()
         self._initialized = False
-        self._messages: dict[str, str] = {}
 
     def _ensure_provider(self) -> Any:
         if self._provider is None:
@@ -201,9 +205,12 @@ class OpenCodeStore:
         if existing:
             if existing.message_digest != digest:
                 raise ValueError("The command idempotency key was already used with another message.")
-            self._messages.setdefault(existing.command_id, message)
+            if existing.message_ciphertext is None or existing.message_key_id is None:
+                ciphertext, key_id = encrypt_user_secret_text(message)
+                self._update_command_message(existing.command_id, ciphertext, key_id)
             return existing
         now = _timestamp()
+        ciphertext, key_id = encrypt_user_secret_text(message)
         command = StoredCommand(
             command_id=command_id,
             session_id=session.session_id,
@@ -214,6 +221,8 @@ class OpenCodeStore:
             idempotency_key=idempotency_key,
             status=OpenCodeCommandStatus.QUEUED,
             message_digest=digest,
+            message_ciphertext=ciphertext,
+            message_key_id=key_id,
             attempt_count=0,
             lease_expires_at=None,
             lease_token_hash=None,
@@ -229,11 +238,10 @@ class OpenCodeStore:
                 connection.execute(
                     "INSERT INTO opencode_commands "
                     "(command_id, session_id, connector_id, owner_user_id, project_id, operation, idempotency_key, "
-                    "status, message_digest, attempt_count, lease_expires_at, lease_token_hash, created_at, updated_at, completed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     "status, message_digest, message_ciphertext, message_key_id, attempt_count, lease_expires_at, lease_token_hash, created_at, updated_at, completed_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     tuple(command.as_record().values()),
                 )
-        self._messages[command_id] = message
         return command
 
     def find_command(self, session_id: str, idempotency_key: str) -> StoredCommand | None:
@@ -332,7 +340,8 @@ class OpenCodeStore:
                     or []
                 )
                 if updated:
-                    return _connector_command(_command_from_record(updated[0]), lease_token, self._messages.get(str(row["command_id"])))
+                    updated_command = _command_from_record(updated[0])
+                    return _connector_command(updated_command, lease_token, self._command_message(updated_command))
             return None
         with self._connection(begin_immediate=True) as connection:
             row = connection.execute(
@@ -352,7 +361,8 @@ class OpenCodeStore:
             )
             record.update(status=OpenCodeCommandStatus.LEASED.value, attempt_count=attempt_count,
                           lease_expires_at=expiry, lease_token_hash=lease_hash, updated_at=now_text)
-        return _connector_command(_command_from_record(record), lease_token, self._messages.get(str(record["command_id"])))
+        command = _command_from_record(record)
+        return _connector_command(command, lease_token, self._command_message(command))
 
     def heartbeat(self, command: StoredCommand, lease_token: str) -> StoredCommand:
         self._require_lease(command, lease_token)
@@ -469,6 +479,23 @@ class OpenCodeStore:
         if expiry is None or expiry <= _now():
             raise PermissionError("The command lease is invalid or has expired.")
 
+    def _command_message(self, command: StoredCommand) -> str | None:
+        if command.message_ciphertext is None or command.message_key_id is None:
+            return None
+        return decrypt_user_secret_text(command.message_ciphertext, command.message_key_id)
+
+    def _update_command_message(self, command_id: str, ciphertext: str, key_id: str) -> None:
+        provider = self._ensure_provider()
+        values = {"message_ciphertext": ciphertext, "message_key_id": key_id}
+        if isinstance(provider, SupabaseProvider):
+            provider.client.table("opencode_commands").update(values).eq("command_id", command_id).execute()
+            return
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE opencode_commands SET message_ciphertext = ?, message_key_id = ? WHERE command_id = ?",
+                (ciphertext, key_id, command_id),
+            )
+
     def _connection(self, *, begin_immediate: bool = False) -> Any:
         provider = self._ensure_provider()
         if not isinstance(provider, SQLiteProvider):
@@ -517,6 +544,7 @@ def _command_from_record(record: dict[str, Any]) -> StoredCommand:
         command_id=str(record["command_id"]), session_id=str(record["session_id"]), connector_id=str(record["connector_id"]),
         owner_user_id=str(record["owner_user_id"]), project_id=str(record["project_id"]), operation=OpenCodeOperation(str(record["operation"])),
         idempotency_key=str(record["idempotency_key"]), status=OpenCodeCommandStatus(str(record["status"])), message_digest=str(record["message_digest"]),
+        message_ciphertext=record.get("message_ciphertext"), message_key_id=record.get("message_key_id"),
         attempt_count=int(record.get("attempt_count") or 0), lease_expires_at=record.get("lease_expires_at"), lease_token_hash=record.get("lease_token_hash"),
         created_at=str(record["created_at"]), updated_at=str(record["updated_at"]), completed_at=record.get("completed_at"),
     )

@@ -15,7 +15,7 @@ OPENCODE_TABLE_CONTRACTS = (
         "opencode_commands",
         (
             "command_id", "session_id", "connector_id", "owner_user_id", "project_id", "operation",
-            "idempotency_key", "status", "message_digest", "attempt_count", "lease_expires_at",
+            "idempotency_key", "status", "message_digest", "message_ciphertext", "message_key_id", "attempt_count", "lease_expires_at",
             "lease_token_hash", "created_at", "updated_at", "completed_at",
         ),
     ),
