@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import logging
 from typing import Any, Awaitable, Callable, Protocol
@@ -40,6 +41,11 @@ from forma_core.workspaces.projects.cad_generation import (
     cad_project_artifact,
 )
 from forma_core.workspaces.projects.output import attach_hardware_reference_image, attach_product_image
+from forma_core.user_integrations import (
+    ResolvedIntegrationSettings,
+    UserIntegrationStore,
+    resolve_user_integration_settings,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -73,11 +79,13 @@ class HardwareIRGenerationEngine:
         model_name: str | None = None,
         use_simulation: bool = False,
         generate_image: bool = True,
+        settings: ResolvedIntegrationSettings | None = None,
     ) -> None:
         self.provider_name = provider_name
         self.model_name = model_name
         self.use_simulation = use_simulation
         self.generate_image = generate_image
+        self.settings = settings
 
     def generate(
         self,
@@ -95,6 +103,7 @@ class HardwareIRGenerationEngine:
             provider_name=self.provider_name,
             model_name=self.model_name,
             persist_project=False,
+            settings=self.settings,
         )
         state = orchestrator.generate_project(
             prompt,
@@ -119,7 +128,7 @@ class HardwareIRGenerationEngine:
         generate_product_image = self.generate_image and generation_status == "succeeded"
         if generate_product_image:
             emit_agent_pipeline_event("default", "image_generation", "started")
-        attach_product_image(prompt, state, generate_image=generate_product_image)
+        attach_product_image(prompt, state, generate_image=generate_product_image, settings=self.settings)
         if image_data:
             attach_hardware_reference_image(state, image_data, media_type=decoded_media_type or image_media_type)
         if generate_product_image:
@@ -370,6 +379,15 @@ class GenerationWorker:
             cancellation_check = None
 
         try:
+            generation_engine = self._engine
+            if isinstance(self._engine, HardwareIRGenerationEngine):
+                settings = await asyncio.to_thread(
+                    resolve_user_integration_settings,
+                    UserIntegrationStore.for_user(owner_user_id),
+                    fail_open=False,
+                )
+                generation_engine = copy.copy(self._engine)
+                generation_engine.settings = settings
             if cancellation_check is not None and cancellation_check():
                 return _cancelled_result(request)
             progress_sequence = max(0, int(request.metadata.get("progress_sequence_start") or 0)) + 1
@@ -380,7 +398,7 @@ class GenerationWorker:
                 percent_complete=10,
                 message="Generating structured project state from the frozen DesignBrief.",
             ))
-            if isinstance(self._engine, HardwareIRGenerationEngine):
+            if isinstance(generation_engine, HardwareIRGenerationEngine):
                 event_loop = asyncio.get_running_loop()
 
                 prior_generation_run = request.metadata.get("prior_generation_run")
@@ -436,10 +454,10 @@ class GenerationWorker:
                         future.result()
 
                     with observe_agent_pipeline(record_pipeline_event, cancellation_check=cancellation_check):
-                        generation_parameters = inspect.signature(self._engine.generate).parameters
+                        generation_parameters = inspect.signature(generation_engine.generate).parameters
                         if "generation_metadata" not in generation_parameters:
-                            return self._engine.generate(payload.design_brief)
-                        return self._engine.generate(
+                            return generation_engine.generate(payload.design_brief)
+                        return generation_engine.generate(
                             payload.design_brief,
                             generation_metadata={
                                 "prior_generation_run": prior_generation_run,

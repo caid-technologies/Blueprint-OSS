@@ -18,6 +18,7 @@ from forma_core.database import (
 )
 from forma_core.images import build_image_provider, build_project_visual_spec
 from forma_core.persistence.images import get_image_storage_config, upload_image_to_supabase_s3
+from forma_core.user_integrations import ResolvedIntegrationSettings
 
 
 logger = logging.getLogger(__name__)
@@ -143,9 +144,15 @@ def attach_product_image(
     generate_image: bool = False,
     provider_factory: ImageProviderFactory = build_image_provider,
     storage_handler: ImageStorageHandler = store_project_image,
+    settings: Optional[ResolvedIntegrationSettings] = None,
 ) -> None:
     """Generate product visuals and attach UI-compatible metadata to a HardwareIR."""
-    image_provider = provider_factory(force_enabled=generate_image)
+    try:
+        image_provider = provider_factory(force_enabled=generate_image, settings=settings)
+    except TypeError as exc:
+        if "settings" not in str(exc):
+            raise
+        image_provider = provider_factory(force_enabled=generate_image)
     image_config = _safe_image_config(image_provider.get_debug_config())
     status = "pending" if generate_image else "not_requested"
     ir.assembly_metadata = {

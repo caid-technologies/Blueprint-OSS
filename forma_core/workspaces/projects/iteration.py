@@ -25,6 +25,7 @@ from forma_core.workspaces.projects.objects import (
     namespace_payload,
 )
 from forma_core.validation import build_validation_summary, validate_circuit
+from forma_core.user_integrations import ResolvedIntegrationSettings
 
 
 logger = logging.getLogger(__name__)
@@ -545,6 +546,7 @@ class ProjectIterator:
         provider_name: Optional[str] = None,
         model_name: Optional[str] = None,
         runtime_config: Optional[LLMRuntimeConfig] = None,
+        settings: Optional[ResolvedIntegrationSettings] = None,
         llm_provider: Optional[StructuredLLMProvider] = None,
         use_simulation: bool = False,
         require_live_generation: bool = False,
@@ -552,8 +554,9 @@ class ProjectIterator:
         self.runtime_config = runtime_config or resolve_llm_runtime_config(
             provider_name=provider_name,
             model_name=model_name,
+            settings=settings,
         )
-        self.llm_provider = llm_provider or build_llm_provider(runtime_config=self.runtime_config)
+        self.llm_provider = llm_provider or build_llm_provider(runtime_config=self.runtime_config, settings=settings)
         self.use_simulation = use_simulation or not self.llm_provider.is_configured
         self.require_live_generation = require_live_generation
 
@@ -639,6 +642,7 @@ def iterate_project(
     provider_name: Optional[str] = None,
     model_name: Optional[str] = None,
     runtime_config: Optional[LLMRuntimeConfig] = None,
+    settings: Optional[ResolvedIntegrationSettings] = None,
     llm_provider: Optional[StructuredLLMProvider] = None,
     use_simulation: bool = False,
     require_live_generation: bool = False,
@@ -647,6 +651,7 @@ def iterate_project(
         provider_name=provider_name,
         model_name=model_name,
         runtime_config=runtime_config,
+        settings=settings,
         llm_provider=llm_provider,
         use_simulation=use_simulation,
         require_live_generation=require_live_generation,

@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -32,6 +32,8 @@ from forma_core.agents.prompt_compaction import (
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+Settings = Mapping[str, str]
 
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-2"
 DEFAULT_VERTEX_IMAGE_MODEL = "gemini-3.1-flash-image"
@@ -77,38 +79,38 @@ class GeneratedImage:
     model_license: Optional[str] = None
 
 
-def _env(name: str, default: Optional[str] = None) -> Optional[str]:
-    value = config.get(name)
+def _env(name: str, default: Optional[str] = None, settings: Optional[Settings] = None) -> Optional[str]:
+    value = settings.get(name) if settings is not None else config.get(name)
     if value is None:
         return default
     stripped = value.strip()
     return stripped if stripped else default
 
 
-def _first_env(names: List[str], default: Optional[str] = None) -> Optional[str]:
+def _first_env(names: List[str], default: Optional[str] = None, settings: Optional[Settings] = None) -> Optional[str]:
     for name in names:
-        value = _env(name)
+        value = _env(name, settings=settings)
         if value is not None:
             return value
     return default
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = config.get(name)
+def _env_bool(name: str, default: bool = False, settings: Optional[Settings] = None) -> bool:
+    value = settings.get(name) if settings is not None else config.get(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _first_env_bool(names: List[str], default: bool = False) -> bool:
+def _first_env_bool(names: List[str], default: bool = False, settings: Optional[Settings] = None) -> bool:
     for name in names:
-        if config.get(name) is not None:
-            return _env_bool(name, default)
+        if (settings is not None and name in settings) or (settings is None and config.get(name) is not None):
+            return _env_bool(name, default, settings=settings)
     return default
 
 
-def _first_env_float(names: List[str], default: float) -> float:
-    raw_value = _first_env(names)
+def _first_env_float(names: List[str], default: float, settings: Optional[Settings] = None) -> float:
+    raw_value = _first_env(names, settings=settings)
     if raw_value is None:
         return default
     try:
@@ -118,8 +120,8 @@ def _first_env_float(names: List[str], default: float) -> float:
         return default
 
 
-def _first_env_int(names: List[str], default: int) -> int:
-    raw_value = _first_env(names)
+def _first_env_int(names: List[str], default: int, settings: Optional[Settings] = None) -> int:
+    raw_value = _first_env(names, settings=settings)
     if raw_value is None:
         return default
     try:
@@ -129,10 +131,11 @@ def _first_env_int(names: List[str], default: int) -> int:
         return default
 
 
-def _first_env_optional_int(names: List[str]) -> Optional[int]:
-    raw_value = _first_env(names)
+def _first_env_optional_int(names: List[str], settings: Optional[Settings] = None) -> Optional[int]:
+    raw_value = _first_env(names, settings=settings)
     if raw_value is None:
         return None
+
     try:
         return int(raw_value)
     except ValueError:
@@ -140,6 +143,15 @@ def _first_env_optional_int(names: List[str]) -> Optional[int]:
         return None
 
 
+def _scoped_image_env_helpers(settings: Optional[Settings]):
+    return (
+        lambda name, default=None: _env(name, default, settings),
+        lambda names, default=None: _first_env(names, default, settings),
+        lambda names, default=False: _first_env_bool(names, default, settings),
+        lambda names, default=0.0: _first_env_float(names, default, settings),
+        lambda names, default=0: _first_env_int(names, default, settings),
+        lambda names: _first_env_optional_int(names, settings),
+    )
 def _truncate(value: Any, limit: int) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -232,7 +244,8 @@ class NoImageProvider(ImageProvider):
 
 
 class OpenAIImageProvider(ImageProvider):
-    def __init__(self, provider_name: str = "openai", enabled: bool = True, force_enabled: bool = False) -> None:
+    def __init__(self, provider_name: str = "openai", enabled: bool = True, force_enabled: bool = False, settings: Optional[Settings] = None) -> None:
+        _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
         normalized_provider = provider_name.strip().lower().replace("_", "-")
         self.provider_name = "openai-compatible" if normalized_provider != "openai" else "openai"
         self.enabled = enabled or force_enabled
@@ -565,7 +578,8 @@ class OpenAIImageProvider(ImageProvider):
 class VertexAIImageProvider(OpenAIImageProvider):
     """Nano Banana image generation on Vertex AI using Application Default Credentials."""
 
-    def __init__(self, enabled: bool = True, force_enabled: bool = False) -> None:
+    def __init__(self, enabled: bool = True, force_enabled: bool = False, settings: Optional[Settings] = None) -> None:
+        _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
         ImageProvider.__init__(self)
         self.provider_name = "vertex"
         self.enabled = enabled or force_enabled
@@ -749,7 +763,8 @@ class VertexAIImageProvider(OpenAIImageProvider):
 
 
 class GMIImageProvider(OpenAIImageProvider):
-    def __init__(self, enabled: bool = True, force_enabled: bool = False) -> None:
+    def __init__(self, enabled: bool = True, force_enabled: bool = False, settings: Optional[Settings] = None) -> None:
+        _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
         ImageProvider.__init__(self)
         self.provider_name = "gmi"
         self.enabled = enabled or force_enabled
@@ -1009,7 +1024,8 @@ class GMIImageProvider(OpenAIImageProvider):
 
 
 class TogetherImageProvider(OpenAIImageProvider):
-    def __init__(self, enabled: bool = True, force_enabled: bool = False) -> None:
+    def __init__(self, enabled: bool = True, force_enabled: bool = False, settings: Optional[Settings] = None) -> None:
+        _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
         ImageProvider.__init__(self)
         self.provider_name = "together"
         self.enabled = enabled or force_enabled
@@ -1146,7 +1162,8 @@ class TogetherImageProvider(OpenAIImageProvider):
 class HuggingFaceImageProvider(ImageProvider):
     provider_name = "huggingface"
 
-    def __init__(self, enabled: bool = True, force_enabled: bool = False) -> None:
+    def __init__(self, enabled: bool = True, force_enabled: bool = False, settings: Optional[Settings] = None) -> None:
+        _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
         self.enabled = enabled or force_enabled
         self.api_key = _first_env(["HUGGINGFACE_IMAGE_API_KEY", "HF_IMAGE_TOKEN", "HF_TOKEN", "HUGGINGFACE_API_KEY", "HUGGINGFACE_HUB_TOKEN", "HF_API_TOKEN"])
         self.model_name = _first_env(["HUGGINGFACE_IMAGE_MODEL", "HF_IMAGE_MODEL", "IMAGE_MODEL"], "black-forest-labs/FLUX.1-schnell") or "black-forest-labs/FLUX.1-schnell"
@@ -2951,7 +2968,8 @@ def build_project_layout_diagram_image(
     )
 
 
-def build_image_provider(force_enabled: bool = False) -> ImageProvider:
+def build_image_provider(force_enabled: bool = False, settings: Optional[Settings] = None) -> ImageProvider:
+    _env, _first_env, _first_env_bool, _first_env_float, _first_env_int, _first_env_optional_int = _scoped_image_env_helpers(settings)
     provider_name = (_env("IMAGE_PROVIDER") or "").strip().lower().replace("_", "-")
     enabled_default = bool(provider_name and provider_name not in {"none", "disabled", "off", "false", "simulation", "mock"})
     enabled = _first_env_bool(["IMAGE_OUTPUT_ENABLED", "OPENAI_IMAGE_OUTPUT_ENABLED"], default=enabled_default)
@@ -2978,15 +2996,15 @@ def build_image_provider(force_enabled: bool = False) -> ImageProvider:
     if provider_name in {"none", "disabled", "off", "false", "simulation", "mock"}:
         return NoImageProvider()
     if provider_name in {"openai", "openai-compatible", "compatible"}:
-        return OpenAIImageProvider(provider_name=provider_name, enabled=enabled, force_enabled=force_enabled)
+        return OpenAIImageProvider(provider_name=provider_name, enabled=enabled, force_enabled=force_enabled, settings=settings)
     if provider_name in {"gmi", "gmi-cloud", "gmicloud", "gemicloud"}:
-        return GMIImageProvider(enabled=enabled, force_enabled=force_enabled)
+        return GMIImageProvider(enabled=enabled, force_enabled=force_enabled, settings=settings)
     if provider_name in {"together", "together-ai", "togetherai"}:
-        return TogetherImageProvider(enabled=enabled, force_enabled=force_enabled)
+        return TogetherImageProvider(enabled=enabled, force_enabled=force_enabled, settings=settings)
     if provider_name in {"vertex", "vertex-ai", "google-vertex", "google-vertex-ai", "nano-banana"}:
-        return VertexAIImageProvider(enabled=enabled, force_enabled=force_enabled)
+        return VertexAIImageProvider(enabled=enabled, force_enabled=force_enabled, settings=settings)
     if provider_name in {"huggingface", "hugging-face", "hf"}:
-        return HuggingFaceImageProvider(enabled=enabled, force_enabled=force_enabled)
+        return HuggingFaceImageProvider(enabled=enabled, force_enabled=force_enabled, settings=settings)
 
     logger.warning("Unsupported IMAGE_PROVIDER %r; image output is disabled.", provider_name)
     return NoImageProvider(
@@ -2995,9 +3013,9 @@ def build_image_provider(force_enabled: bool = False) -> ImageProvider:
     )
 
 
-def get_image_output_debug_config() -> Dict[str, Any]:
-    default_config = build_image_provider().get_debug_config()
-    request_config = build_image_provider(force_enabled=True).get_debug_config()
+def get_image_output_debug_config(settings: Optional[Settings] = None) -> Dict[str, Any]:
+    default_config = build_image_provider(settings=settings).get_debug_config()
+    request_config = build_image_provider(force_enabled=True, settings=settings).get_debug_config()
     return {
         **default_config,
         "default_enabled": default_config.get("enabled", False),

@@ -64,10 +64,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(REPO_ROOT / ".env")
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
-from forma_core.user_integrations import UserIntegrationStore, apply_user_integrations_to_environment, require_user_secrets_key
+from forma_core.user_integrations import UserIntegrationStore, require_user_secrets_key, resolve_user_integration_settings, ResolvedIntegrationSettings
 from forma_core.vertex_auth import VercelOidcContextMiddleware
-
-apply_user_integrations_to_environment()
 
 from apps.api.logging_config import configure_backend_logging
 
@@ -373,28 +371,35 @@ def _deployment_runtime_config(llm_config: Dict[str, Any]) -> Dict[str, Any]:
     return deployment_runtime_config(llm_config, signup_storage=get_database_config()["client"])
 
 
-def _resolved_client_runtime_config() -> tuple[Dict[str, Any], Dict[str, Any]]:
-    llm_config = HardwarePipelineOrchestrator().get_debug_config()
-    image_config = get_image_output_debug_config()
+def _resolved_client_runtime_config(settings: Optional[ResolvedIntegrationSettings] = None) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    llm_config = HardwarePipelineOrchestrator(settings=settings).get_debug_config()
+    image_config = get_image_output_debug_config(settings=settings)
     contract = resolve_runtime_contract(
         llm_config=llm_config,
         image_config=image_config,
         workflows=list_workflows(),
         signup_storage=get_database_config()["client"],
+        settings=settings,
     )
     contract["video"] = {
-        "generation": GMICloudProvider().get_debug_config(),
+        "generation": GMICloudProvider(settings=settings).get_debug_config(),
         "self_correction": FireworksVideoReviewClient().get_debug_config(),
     }
     return llm_config, contract
 
 
-def _apply_user_integrations(user: UserContext) -> None:
-    """Load provider settings only for operations that consume them."""
-    if user.provider == "local":
-        apply_user_integrations_to_environment()
-    elif user.owner_user_id:
-        apply_user_integrations_to_environment(UserIntegrationStore.for_user(user.owner_user_id))
+def _resolve_user_integrations(user: Optional[UserContext]) -> ResolvedIntegrationSettings:
+    """Snapshot provider settings for this request without mutating the process environment."""
+    if user is None or user.provider == "local":
+        return resolve_user_integration_settings()
+    if user.owner_user_id:
+        return resolve_user_integration_settings(UserIntegrationStore.for_user(user.owner_user_id))
+    return resolve_user_integration_settings()
+
+
+def _apply_user_integrations(user: UserContext) -> ResolvedIntegrationSettings:
+    """Compatibility shim for callers that previously requested environment mutation."""
+    return _resolve_user_integrations(user)
 
 
 def _job_owner_user_id(job: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -578,9 +583,9 @@ def debug_config_endpoint(
     """
     Reports LLM provider and model resolution state without exposing credentials.
     """
-    _apply_user_integrations(user)
+    settings = _resolve_user_integrations(user)
     try:
-        orchestrator = HardwarePipelineOrchestrator(provider_name=provider, model_name=model)
+        orchestrator = HardwarePipelineOrchestrator(provider_name=provider, model_name=model, settings=settings)
         llm_config = orchestrator.get_debug_config()
         return {
             **llm_config,
@@ -588,11 +593,11 @@ def debug_config_endpoint(
             "deployment": _deployment_runtime_config(llm_config),
             "database": get_database_config(),
             "job_metadata": JOB_STORE.get_config(),
-            "image_output": get_image_output_debug_config(),
+            "image_output": get_image_output_debug_config(settings=settings),
             "image_storage": get_image_storage_config(),
             "observability": get_langfuse_debug_config(),
             "debug": get_debug_mode_config(),
-            "video_generation": GMICloudProvider().get_debug_config(),
+            "video_generation": GMICloudProvider(settings=settings).get_debug_config(),
             "video_self_correction": FireworksVideoReviewClient().get_debug_config(),
             "video_storage": get_video_storage_config(),
             "security": security_config(),
@@ -631,9 +636,9 @@ def debug_config_endpoint(
 @app.get("/runtime/config")
 def runtime_config_endpoint(user: UserContext = Depends(optional_user_context)):
     """Return the canonical, credential-safe runtime contract for this user."""
-    _apply_user_integrations(user)
+    settings = _resolve_user_integrations(user)
     try:
-        _, contract = _resolved_client_runtime_config()
+        _, contract = _resolved_client_runtime_config(settings)
         return contract
     except LLMProviderConfigError as e:
         correlation_id = new_error_correlation_id()
@@ -674,13 +679,14 @@ async def generate_project_endpoint(request: GenerateProjectRequest, user: UserC
         except WorkflowStateError as exc:
             status_code = status.HTTP_404_NOT_FOUND if exc.code == "workflow_not_found" else status.HTTP_409_CONFLICT
             raise HTTPException(status_code=status_code, detail=exc.as_dict()) from exc
-    _apply_user_integrations(user)
+    settings = _resolve_user_integrations(user)
     try:
         llm_config = get_workflow_debug_config(
             request.workflow,
             provider_name=request.provider,
             model_name=request.model,
             external_source_provider=request.external_source_provider,
+            settings=settings,
         )
     except LLMProviderConfigError as e:
         raise HTTPException(
@@ -1057,20 +1063,20 @@ VIDEO_FAILED_STATUSES = {"failed", "failure", "error", "cancelled", "canceled"}
 VIDEO_SUCCESS_STATUSES = {"success", "succeeded", "completed", "complete", "done"}
 
 
-def _normalize_video_model(model: str | None, mode: str = VIDEO_MODE_IMAGE_TO_VIDEO) -> str:
+def _normalize_video_model(model: str | None, mode: str = VIDEO_MODE_IMAGE_TO_VIDEO, settings: Optional[ResolvedIntegrationSettings] = None) -> str:
     normalized_mode = normalize_video_mode(mode)
-    normalized = (model or get_default_video_model(normalized_mode)).strip()
+    normalized = (model or get_default_video_model(normalized_mode, settings)).strip()
     if not normalized:
         raise HTTPException(status_code=400, detail="Video model is required.")
-    allowed_models = get_available_video_models(normalized_mode)
+    allowed_models = get_available_video_models(normalized_mode, settings)
     if normalized not in allowed_models:
         raise HTTPException(status_code=400, detail=f"Unsupported {normalized_mode} model '{normalized}'.")
     return normalized
 
 
-def _normalize_video_request_aspect_ratio(aspect_ratio: str | None) -> str:
+def _normalize_video_request_aspect_ratio(aspect_ratio: str | None, settings: Optional[ResolvedIntegrationSettings] = None) -> str:
     try:
-        return normalize_video_aspect_ratio(aspect_ratio)
+        return normalize_video_aspect_ratio(aspect_ratio, settings)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1231,20 +1237,21 @@ def _video_route_response(
 
 
 @app.get("/video/models")
-def list_video_models_endpoint():
+def list_video_models_endpoint(user: UserContext = Depends(optional_user_context)):
     """Returns the backend-approved video generation models."""
-    models = get_available_video_model_options()
-    default_model = get_default_video_model(VIDEO_MODE_IMAGE_TO_VIDEO)
-    default_video_to_video_model = get_default_video_model(VIDEO_MODE_VIDEO_TO_VIDEO)
-    provider_config = GMICloudProvider().get_debug_config()
+    settings = _resolve_user_integrations(user)
+    models = get_available_video_model_options(settings=settings)
+    default_model = get_default_video_model(VIDEO_MODE_IMAGE_TO_VIDEO, settings)
+    default_video_to_video_model = get_default_video_model(VIDEO_MODE_VIDEO_TO_VIDEO, settings)
+    provider_config = GMICloudProvider(settings=settings).get_debug_config()
     return {
         "models": [model.response_metadata() for model in models],
         "defaultModel": default_model,
         "default_model": default_model,
         "defaultVideoToVideoModel": default_video_to_video_model,
         "default_video_to_video_model": default_video_to_video_model,
-        "aspectRatioOptions": get_available_video_aspect_ratios(),
-        "aspect_ratio_options": get_available_video_aspect_ratios(),
+        "aspectRatioOptions": get_available_video_aspect_ratios(settings),
+        "aspect_ratio_options": get_available_video_aspect_ratios(settings),
         "generationConfigured": provider_config["configured"],
         "generation_configured": provider_config["configured"],
         "reason": provider_config.get("reason"),
@@ -1271,13 +1278,14 @@ def list_project_videos_endpoint(project_id: str, user: UserContext = Depends(re
 def create_image_to_video_endpoint(request: VideoImageToVideoRequest, user: UserContext = Depends(require_user_context)):
     """Queues a backend-only GMI Cloud image-to-video generation request."""
     require_hosted_chat_enabled()
+    settings = _resolve_user_integrations(user)
     project_id = _require_non_empty(request.projectId, "projectId is required.")
     project = _resolve_project_owner(project_id, user)
     image = _require_non_empty(request.image, "image is required.")
     prompt = _require_non_empty(request.prompt, "prompt is required.")
-    model = _normalize_video_model(request.model, VIDEO_MODE_IMAGE_TO_VIDEO)
+    model = _normalize_video_model(request.model, VIDEO_MODE_IMAGE_TO_VIDEO, settings)
     duration = _require_non_empty(request.duration, "duration is required.")
-    aspect_ratio = _normalize_video_request_aspect_ratio(request.aspectRatio or request.aspect_ratio)
+    aspect_ratio = _normalize_video_request_aspect_ratio(request.aspectRatio or request.aspect_ratio, settings)
     sound = "on" if (request.sound or "").strip().lower() == "on" else "off"
 
     try:
@@ -1285,7 +1293,7 @@ def create_image_to_video_endpoint(request: VideoImageToVideoRequest, user: User
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    provider = GMICloudProvider()
+    provider = GMICloudProvider(settings=settings)
     try:
         result = provider.create_image_to_video(
             image=image,
@@ -1328,13 +1336,14 @@ def create_image_to_video_endpoint(request: VideoImageToVideoRequest, user: User
 def create_video_to_video_endpoint(request: VideoToVideoRequest, user: UserContext = Depends(require_user_context)):
     """Queues a backend-only GMI Cloud video-to-video generation request."""
     require_hosted_chat_enabled()
+    settings = _resolve_user_integrations(user)
     project_id = _require_non_empty(request.projectId, "projectId is required.")
     project = _resolve_project_owner(project_id, user)
     video = _require_non_empty(request.video, "video is required.")
     prompt = _require_non_empty(request.prompt, "prompt is required.")
-    model = _normalize_video_model(request.model, VIDEO_MODE_VIDEO_TO_VIDEO)
+    model = _normalize_video_model(request.model, VIDEO_MODE_VIDEO_TO_VIDEO, settings)
     duration = _require_non_empty(request.duration, "duration is required.")
-    aspect_ratio = _normalize_video_request_aspect_ratio(request.aspectRatio or request.aspect_ratio)
+    aspect_ratio = _normalize_video_request_aspect_ratio(request.aspectRatio or request.aspect_ratio, settings)
     sound = "on" if (request.sound or "").strip().lower() == "on" else "off"
 
     try:
@@ -1342,7 +1351,7 @@ def create_video_to_video_endpoint(request: VideoToVideoRequest, user: UserConte
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    provider = GMICloudProvider()
+    provider = GMICloudProvider(settings=settings)
     try:
         result = provider.create_video_to_video(
             video=video,
@@ -1396,11 +1405,12 @@ def get_image_to_video_status_endpoint(
     request_id = _require_non_empty(request_id, "requestId is required.")
     project_id = _require_non_empty(projectId, "projectId is required.")
     project = _resolve_project_owner(project_id, user)
+    settings = _resolve_user_integrations(user)
     normalized_mode = normalize_video_mode(mode)
-    model = _normalize_video_model(model, normalized_mode)
-    aspect_ratio = _normalize_video_request_aspect_ratio(aspectRatio) if aspectRatio else None
+    model = _normalize_video_model(model, normalized_mode, settings)
+    aspect_ratio = _normalize_video_request_aspect_ratio(aspectRatio, settings) if aspectRatio else None
 
-    provider = GMICloudProvider()
+    provider = GMICloudProvider(settings=settings)
     try:
         result = provider.get_request_status(request_id)
     except Exception as exc:
@@ -1445,7 +1455,7 @@ def alpha_signup_endpoint(request: AlphaSignupRequest):
     Captures alpha access interest while deployed generation is unavailable.
     """
     try:
-        llm_config = HardwarePipelineOrchestrator().get_debug_config()
+        llm_config = HardwarePipelineOrchestrator(settings=_resolve_user_integrations(None)).get_debug_config()
         deployment_config = _deployment_runtime_config(llm_config)
         save_alpha_signup(
             name=request.name,
@@ -2944,7 +2954,7 @@ def iterate_project_endpoint(
 ):
     """Applies an iteration instruction to an existing project through forma_core."""
     require_hosted_chat_enabled()
-    _apply_user_integrations(user)
+    settings = _resolve_user_integrations(user)
     try:
         project = resolve_project_for_read(project_id, user.owner_user_id).project
     except ProjectReadError:
@@ -2991,7 +3001,7 @@ def iterate_project_endpoint(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.as_dict()) from exc
 
     try:
-        iterator = ProjectIterator(provider_name=request.provider, model_name=request.model)
+        iterator = ProjectIterator(provider_name=request.provider, model_name=request.model, settings=settings)
         revised_ir = iterator.iterate_project(
             current_ir,
             request.instruction,
@@ -3165,7 +3175,7 @@ def video_self_correct_project_endpoint(
 ):
     """Reviews a generated project video with a Fireworks native video model and applies a corrective iteration."""
     require_hosted_chat_enabled()
-    _apply_user_integrations(user)
+    settings = _resolve_user_integrations(user)
     project = _resolve_project_owner(project_id, user)
     owner_user_id = user.owner_user_id
     try:
@@ -3178,7 +3188,7 @@ def video_self_correct_project_endpoint(
         review_video_url = _resolve_stored_video_review_target(project.project_id, request)
         agent = FireworksVideoSelfCorrectionAgent(
             review_client=FireworksVideoReviewClient(model=request.review_model),
-            iterator=ProjectIterator(provider_name=request.provider, model_name=request.model),
+            iterator=ProjectIterator(provider_name=request.provider, model_name=request.model, settings=settings),
         )
         revised_ir, review = agent.correct_project_from_video(
             current_ir,

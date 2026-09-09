@@ -69,7 +69,7 @@ class A2AUserIntegrationTests(unittest.TestCase):
             )
 
         def fake_attach_product_image(*_args, **_kwargs):
-            provider = build_image_provider(force_enabled=True)
+            provider = build_image_provider(force_enabled=True, settings=_kwargs["settings"])
             observed.update(provider.get_debug_config())
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -121,7 +121,6 @@ class A2AUserIntegrationTests(unittest.TestCase):
 
         def fake_generate_project_with_workflow(*_args, **_kwargs):
             self.assertFalse(_kwargs["persist_project"])
-            user_integrations.apply_user_integrations_to_environment()
             return SimpleNamespace(
                 assembly_metadata={},
                 constraints=[],
@@ -140,7 +139,7 @@ class A2AUserIntegrationTests(unittest.TestCase):
             )
 
         def fake_attach_product_image(*_args, **_kwargs):
-            provider = build_image_provider(force_enabled=True)
+            provider = build_image_provider(force_enabled=True, settings=_kwargs["settings"])
             observed.update(provider.get_debug_config())
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -191,7 +190,7 @@ class A2AUserIntegrationTests(unittest.TestCase):
         )
 
         def fake_build_generation_response(*_args, **_kwargs):
-            provider = build_image_provider(force_enabled=True)
+            provider = build_image_provider(force_enabled=True, settings=_kwargs["settings"])
             observed.update(provider.get_debug_config())
             return {"ok": True}
 
