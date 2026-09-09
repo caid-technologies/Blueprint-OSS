@@ -42,6 +42,7 @@ export type RuntimeConfigContract = {
   deployment?: {
     hosted_chat_enabled?: boolean;
     authoring_mode_enabled?: boolean;
+    authoring_access?: boolean;
     opencode_connector_id?: string | null;
   };
   video?: {
@@ -57,5 +58,5 @@ export function usableRuntimeLlmOptions(contract: RuntimeConfigContract): Genera
 }
 
 export function authoringModeEnabled(contract: RuntimeConfigContract): boolean {
-  return contract.deployment?.authoring_mode_enabled === true;
+  return contract.deployment?.authoring_mode_enabled === true && contract.deployment?.authoring_access === true;
 }

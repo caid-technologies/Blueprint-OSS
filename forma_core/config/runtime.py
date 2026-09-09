@@ -167,6 +167,7 @@ def deployment_runtime_config(
     llm_config: Dict[str, Any],
     *,
     signup_storage: Optional[str] = None,
+    authoring_access: bool = False,
 ) -> Dict[str, Any]:
     state = runtime_state()
     deployment_enabled = state["deployment_mode"] == "hosted"
@@ -177,6 +178,7 @@ def deployment_runtime_config(
         "development_mode": state["development_mode"],
         "hosted_chat_enabled": hosted_chat_enabled(),
         "authoring_mode_enabled": authoring_mode_enabled(),
+        "authoring_access": authoring_access,
         "opencode_connector_id": (config.get("FORMA_OPENCODE_CONNECTOR_ID") or "").strip() or None,
         "alpha_generation_gate_active": deployment_enabled and not live_generation_enabled,
         "generation_available": (not deployment_enabled) or live_generation_enabled,

@@ -41,6 +41,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertFalse(contract["provider_setup"]["required"])
         self.assertTrue(contract["deployment"]["hosted_chat_enabled"])
         self.assertFalse(contract["deployment"]["authoring_mode_enabled"])
+        self.assertFalse(contract["deployment"]["authoring_access"])
         self.assertEqual(
             ("cloudflare", "@cf/google/gemma-4-26b-a4b-it"),
             (
@@ -96,8 +97,9 @@ class RuntimeContractTests(unittest.TestCase):
 
         self.assertFalse(contract["deployment"]["hosted_chat_enabled"])
         self.assertFalse(contract["deployment"]["authoring_mode_enabled"])
+        self.assertFalse(contract["deployment"]["authoring_access"])
 
-    def test_authoring_mode_surfaces_in_the_runtime_contract(self) -> None:
+    def test_authoring_mode_surfaces_in_the_runtime_contract_without_granting_user_access(self) -> None:
         with patch.dict(os.environ, {"FORMA_AUTHORING_MODE_ENABLED": "true"}, clear=True):
             contract = resolve_runtime_contract(
                 llm_config={"live_generation_enabled": False, "validation_error": "Unavailable."},
@@ -106,6 +108,7 @@ class RuntimeContractTests(unittest.TestCase):
             )
 
         self.assertTrue(contract["deployment"]["authoring_mode_enabled"])
+        self.assertFalse(contract["deployment"]["authoring_access"])
 
     def test_config_can_select_catalog_as_the_default_workflow(self) -> None:
         with patch.dict(os.environ, {"FORMA_DEFAULT_GENERATION_WORKFLOW": "default"}, clear=True):

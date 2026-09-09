@@ -112,6 +112,7 @@ def resolve_runtime_contract(
     workflows: Optional[list[Dict[str, Any]]] = None,
     signup_storage: Optional[str] = None,
     settings: Optional[Mapping[str, str]] = None,
+    authoring_access: bool = False,
 ) -> Dict[str, Any]:
     """Resolve all client-facing generation decisions from the active environment."""
     resolved_llm_config = llm_config or HardwarePipelineOrchestrator(settings=settings).get_debug_config()
@@ -133,7 +134,11 @@ def resolve_runtime_contract(
             else str(resolved_workflows[0].get("id") or "default")
         )
 
-    deployment = deployment_runtime_config(resolved_llm_config, signup_storage=signup_storage)
+    deployment = deployment_runtime_config(
+        resolved_llm_config,
+        signup_storage=signup_storage,
+        authoring_access=authoring_access,
+    )
     llm_ready = bool(resolved_llm_config.get("live_generation_enabled"))
     llm_reason = resolved_llm_config.get("validation_error")
     image_reason = resolved_image.get("reason")
