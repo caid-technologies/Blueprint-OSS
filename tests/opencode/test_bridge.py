@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -108,44 +109,54 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_store_is_idempotent_leased_and_cursorable(self) -> None:
         project_id = str(uuid4())
-        store = OpenCodeStore(":memory:")
-        try:
-            session = store.create_session(session_id="session", connector_id="mini", owner_user_id="user", project_id=project_id)
-            first = store.create_command(command_id="command", session=session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="same", message="build")
-            duplicate = store.create_command(command_id="other", session=session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="same", message="build")
-            self.assertEqual(first.command_id, duplicate.command_id)
-            claimed = store.claim_next(connector_id="mini", session_id="session")
-            self.assertIsNotNone(claimed)
-            assert claimed is not None
-            self.assertEqual("build", claimed.message)
-            public = project_public_event(ConnectorEventInput(event_id="event", kind="working"), sequence=1, session_id="session", project_id=UUID(project_id))
-            store.add_event(public)
-            self.assertEqual(1, len(store.list_events("session", 0, 10)))
-        finally:
-            store.close()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"FORMA_USER_SECRETS_KEY": "test-key"}, clear=False):
+            path = os.path.join(directory, "opencode.sqlite")
+            store = OpenCodeStore(path)
+            try:
+                session = store.create_session(session_id="session", connector_id="mini", owner_user_id="user", project_id=project_id)
+                first = store.create_command(command_id="command", session=session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="same", message="build")
+                duplicate = store.create_command(command_id="other", session=session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="same", message="build")
+                self.assertEqual(first.command_id, duplicate.command_id)
+                self.assertIsNotNone(first.message_ciphertext)
+                self.assertNotIn("build", str(first.message_ciphertext))
+            finally:
+                store.close()
+
+            reopened = OpenCodeStore(path)
+            try:
+                claimed = reopened.claim_next(connector_id="mini", session_id="session")
+                self.assertIsNotNone(claimed)
+                assert claimed is not None
+                self.assertEqual("build", claimed.message)
+                public = project_public_event(ConnectorEventInput(event_id="event", kind="working"), sequence=1, session_id="session", project_id=UUID(project_id))
+                reopened.add_event(public)
+                self.assertEqual(1, len(reopened.list_events("session", 0, 10)))
+            finally:
+                reopened.close()
 
     def test_store_is_session_scoped_renews_leases_and_completes_idempotently(self) -> None:
         first_project_id = str(uuid4())
         second_project_id = str(uuid4())
-        store = OpenCodeStore(":memory:")
-        try:
-            first_session = store.create_session(session_id="session_a", connector_id="mini", owner_user_id="user", project_id=first_project_id)
-            second_session = store.create_session(session_id="session_b", connector_id="mini", owner_user_id="user", project_id=second_project_id)
-            store.create_command(command_id="command_a", session=first_session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="a", message="first")
-            store.create_command(command_id="command_b", session=second_session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="b", message="second")
-            claimed = store.claim_next(connector_id="mini", session_id="session_a")
-            self.assertIsNotNone(claimed)
-            assert claimed is not None
-            self.assertEqual("command_a", claimed.command_id)
-            stored = store.get_command(claimed.command_id)
-            self.assertIsNotNone(stored)
-            assert stored is not None
-            old_expiry = stored.lease_expires_at
-            renewed = store.heartbeat(stored, claimed.lease_token)
-            self.assertNotEqual(old_expiry, renewed.lease_expires_at)
-            completed = store.complete(renewed, claimed.lease_token, OpenCodeCommandStatus.SUCCEEDED)
-            self.assertEqual(OpenCodeCommandStatus.SUCCEEDED, completed.status)
-            self.assertEqual(completed, store.complete(completed, "not-needed-after-terminal", OpenCodeCommandStatus.SUCCEEDED))
-            self.assertIsNotNone(store.claim_next(connector_id="mini", session_id="session_b"))
-        finally:
-            store.close()
+        with patch.dict(os.environ, {"FORMA_USER_SECRETS_KEY": "test-key"}, clear=False):
+            store = OpenCodeStore(":memory:")
+            try:
+                first_session = store.create_session(session_id="session_a", connector_id="mini", owner_user_id="user", project_id=first_project_id)
+                second_session = store.create_session(session_id="session_b", connector_id="mini", owner_user_id="user", project_id=second_project_id)
+                store.create_command(command_id="command_a", session=first_session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="a", message="first")
+                store.create_command(command_id="command_b", session=second_session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="b", message="second")
+                claimed = store.claim_next(connector_id="mini", session_id="session_a")
+                self.assertIsNotNone(claimed)
+                assert claimed is not None
+                self.assertEqual("command_a", claimed.command_id)
+                stored = store.get_command(claimed.command_id)
+                self.assertIsNotNone(stored)
+                assert stored is not None
+                old_expiry = stored.lease_expires_at
+                renewed = store.heartbeat(stored, claimed.lease_token)
+                self.assertNotEqual(old_expiry, renewed.lease_expires_at)
+                completed = store.complete(renewed, claimed.lease_token, OpenCodeCommandStatus.SUCCEEDED)
+                self.assertEqual(OpenCodeCommandStatus.SUCCEEDED, completed.status)
+                self.assertEqual(completed, store.complete(completed, "not-needed-after-terminal", OpenCodeCommandStatus.SUCCEEDED))
+                self.assertIsNotNone(store.claim_next(connector_id="mini", session_id="session_b"))
+            finally:
+                store.close()
