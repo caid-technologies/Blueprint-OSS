@@ -100,8 +100,15 @@ test("authoring mode is disabled unless the backend explicitly enables it", () =
 test("the runtime contract surfaces an enabled authoring mode", () => {
   const enabled = authoringModeEnabled({
     ...contract(),
-    deployment: { authoring_mode_enabled: true },
+    deployment: { authoring_mode_enabled: true, authoring_access: true },
   });
 
   assert.equal(enabled, true);
+});
+
+test("authoring mode stays disabled for authenticated users without backend access", () => {
+  assert.equal(authoringModeEnabled({
+    ...contract(),
+    deployment: { authoring_mode_enabled: true, authoring_access: false },
+  }), false);
 });

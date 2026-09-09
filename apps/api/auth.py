@@ -243,6 +243,14 @@ def opencode_allowed_emails() -> frozenset[str]:
     return frozenset(email.strip().lower() for email in _csv_env("FORMA_OPENCODE_ALLOWED_EMAILS") if "@" in email)
 
 
+def has_opencode_authoring_access(user: Optional[UserContext]) -> bool:
+    """Return whether this authenticated Clerk user is on the OpenCode allowlist."""
+    if user is None or user.provider != "clerk" or not user.owner_user_id:
+        return False
+    email = clerk_user_email(user.owner_user_id)
+    return bool(email and email.strip().lower() in opencode_allowed_emails())
+
+
 async def require_opencode_authoring_access(request: Request) -> UserContext:
     """Require a hosted Clerk user whose primary email is explicitly allowed.
 
@@ -265,8 +273,7 @@ async def require_opencode_authoring_access(request: Request) -> UserContext:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_opencode_auth_error("opencode_clerk_required", "A Clerk user session is required."),
         )
-    email = clerk_user_email(context.owner_user_id)
-    if not email or email.strip().lower() not in opencode_allowed_emails():
+    if not has_opencode_authoring_access(context):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_opencode_auth_error("opencode_email_not_allowed", "This account is not enabled for hosted OpenCode."),

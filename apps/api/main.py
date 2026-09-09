@@ -174,6 +174,7 @@ from apps.api.auth import (
     require_a2a_websocket_context,
     clerk_user_profile,
     deployed_auth_required,
+    has_opencode_authoring_access,
     optional_user_context,
     require_admin_user_context,
     require_mcp_user_context,
@@ -373,7 +374,10 @@ def _deployment_runtime_config(llm_config: Dict[str, Any]) -> Dict[str, Any]:
     return deployment_runtime_config(llm_config, signup_storage=get_database_config()["client"])
 
 
-def _resolved_client_runtime_config(settings: Optional[ResolvedIntegrationSettings] = None) -> tuple[Dict[str, Any], Dict[str, Any]]:
+def _resolved_client_runtime_config(
+    settings: Optional[ResolvedIntegrationSettings] = None,
+    user: Optional[UserContext] = None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
     llm_config = HardwarePipelineOrchestrator(settings=settings).get_debug_config()
     image_config = get_image_output_debug_config(settings=settings)
     contract = resolve_runtime_contract(
@@ -382,6 +386,7 @@ def _resolved_client_runtime_config(settings: Optional[ResolvedIntegrationSettin
         workflows=list_workflows(),
         signup_storage=get_database_config()["client"],
         settings=settings,
+        authoring_access=has_opencode_authoring_access(user),
     )
     contract["video"] = {
         "generation": GMICloudProvider(settings=settings).get_debug_config(),
@@ -640,7 +645,7 @@ def runtime_config_endpoint(user: UserContext = Depends(optional_user_context)):
     """Return the canonical, credential-safe runtime contract for this user."""
     settings = _resolve_user_integrations(user)
     try:
-        _, contract = _resolved_client_runtime_config(settings)
+        _, contract = _resolved_client_runtime_config(settings, user)
         return contract
     except LLMProviderConfigError as e:
         correlation_id = new_error_correlation_id()

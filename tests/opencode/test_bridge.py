@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
-from apps.api.auth import UserContext, require_opencode_authoring_access
+from apps.api.auth import UserContext, has_opencode_authoring_access, require_opencode_authoring_access
 from apps.api.opencode_api import _require_owned_project
 from apps.api.opencode_mcp import handle_opencode_mcp_json_rpc, opencode_mcp_tools
 from forma_core.opencode.capabilities import CapabilityError, issue_capability, verify_capability
@@ -32,6 +32,16 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 asyncio.run(require_opencode_authoring_access(object()))
         self.assertEqual(403, denied.exception.status_code)
         self.assertEqual("opencode_clerk_required", denied.exception.detail["code"])
+
+    def test_runtime_authoring_access_is_limited_to_the_exact_allowlisted_email(self) -> None:
+        allowed = UserContext(provider="clerk", subject="user_1", owner_user_id="user_1", is_authenticated=True, is_admin=False)
+        denied = UserContext(provider="clerk", subject="user_2", owner_user_id="user_2", is_authenticated=True, is_admin=False)
+        with patch.dict(os.environ, {"FORMA_OPENCODE_ALLOWED_EMAILS": "isayahculbertson@gmail.com"}, clear=True), patch(
+            "apps.api.auth.clerk_user_email",
+            side_effect=lambda user_id: "isayahculbertson@gmail.com" if user_id == "user_1" else "someone-else@example.com",
+        ):
+            self.assertTrue(has_opencode_authoring_access(allowed))
+            self.assertFalse(has_opencode_authoring_access(denied))
 
     def test_project_scope_rejects_a_foreign_owner_before_session_use(self) -> None:
         with patch("apps.api.opencode_api.get_project_identity", return_value={"owner_user_id": "another-user", "status": "active"}):
