@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 
 from apps.api.auth import UserContext, has_opencode_authoring_access, require_opencode_authoring_access
+from apps.api.main import _runtime_config_settings
 from apps.api.opencode_api import _require_owned_project
 from apps.api.opencode_mcp import handle_opencode_mcp_json_rpc, opencode_mcp_tools
 from forma_core.opencode.capabilities import CapabilityError, issue_capability, verify_capability
@@ -42,6 +43,19 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(has_opencode_authoring_access(allowed))
             self.assertFalse(has_opencode_authoring_access(denied))
+
+    def test_allowlisted_runtime_config_falls_back_when_user_settings_are_unreadable(self) -> None:
+        user = UserContext(provider="clerk", subject="user_1", owner_user_id="user_1", is_authenticated=True, is_admin=False)
+        with patch("apps.api.main._resolve_user_integrations", side_effect=RuntimeError("key mismatch")), patch(
+            "apps.api.main.has_opencode_authoring_access", return_value=True,
+        ):
+            self.assertIsNone(_runtime_config_settings(user))
+
+        with patch("apps.api.main._resolve_user_integrations", side_effect=RuntimeError("key mismatch")), patch(
+            "apps.api.main.has_opencode_authoring_access", return_value=False,
+        ):
+            with self.assertRaises(RuntimeError):
+                _runtime_config_settings(user)
 
     def test_project_scope_rejects_a_foreign_owner_before_session_use(self) -> None:
         with patch("apps.api.opencode_api.get_project_identity", return_value={"owner_user_id": "another-user", "status": "active"}):

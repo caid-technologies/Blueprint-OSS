@@ -395,6 +395,20 @@ def _resolved_client_runtime_config(
     return llm_config, contract
 
 
+def _runtime_config_settings(user: Optional[UserContext]) -> Optional[ResolvedIntegrationSettings]:
+    """Keep the allowlisted OpenCode surface available when stale BYOK data is unreadable."""
+    try:
+        return _resolve_user_integrations(user)
+    except RuntimeError as exc:
+        if not has_opencode_authoring_access(user):
+            raise
+        logger.warning(
+            "OpenCode allowlisted runtime config is using deployment defaults after user settings failed: %s",
+            exc,
+        )
+        return None
+
+
 def _resolve_user_integrations(user: Optional[UserContext]) -> ResolvedIntegrationSettings:
     """Snapshot provider settings for this request without mutating the process environment."""
     if user is None or user.provider == "local":
@@ -643,8 +657,8 @@ def debug_config_endpoint(
 @app.get("/runtime/config")
 def runtime_config_endpoint(user: UserContext = Depends(optional_user_context)):
     """Return the canonical, credential-safe runtime contract for this user."""
-    settings = _resolve_user_integrations(user)
     try:
+        settings = _runtime_config_settings(user)
         _, contract = _resolved_client_runtime_config(settings, user)
         return contract
     except LLMProviderConfigError as e:
