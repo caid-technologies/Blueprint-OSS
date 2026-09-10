@@ -52,9 +52,11 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
             owner_user_id="user_1",
             is_authenticated=True,
             is_admin=False,
-            claims={"email": "isayahculbertson@gmail.com"},
         )
-        with patch.dict(os.environ, {"FORMA_OPENCODE_ALLOWED_EMAILS": "isayahculbertson@gmail.com"}, clear=True):
+        with patch.dict(os.environ, {"FORMA_OPENCODE_ALLOWED_EMAILS": "isayahculbertson@gmail.com"}, clear=True), patch(
+            "apps.api.auth.clerk_user_email",
+            return_value="isayahculbertson@gmail.com",
+        ):
             self.assertTrue(has_opencode_authoring_access(user))
 
     def test_allowlisted_runtime_config_falls_back_when_user_settings_are_unreadable(self) -> None:
