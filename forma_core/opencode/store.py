@@ -444,12 +444,15 @@ class OpenCodeStore:
                 session = self.get_session(event.session_id)
                 if session is None:
                     raise ValueError("OpenCode session not found.")
-                candidate = event.model_copy(update={"sequence": session.next_event_sequence})
+                latest = provider.client.table("opencode_events").select("sequence").eq("session_id", event.session_id).order("sequence", desc=True).limit(1).execute().data or []
+                latest_sequence = int(latest[0]["sequence"]) + 1 if latest else 1
+                candidate = event.model_copy(update={"sequence": max(session.next_event_sequence, latest_sequence)})
                 try:
                     provider.client.table("opencode_events").insert({"event_id": candidate.event_id, "session_id": candidate.session_id, "owner_user_id": session.owner_user_id, "project_id": str(candidate.project_id), "sequence": candidate.sequence, "event_json": candidate.model_dump(mode="json"), "created_at": _timestamp(candidate.created_at)}).execute()
+                    provider.client.table("opencode_sessions").update({"next_event_sequence": candidate.sequence + 1, "updated_at": _timestamp()}).eq("session_id", event.session_id).lt("next_event_sequence", candidate.sequence + 1).execute()
                     return candidate
                 except Exception as exc:
-                    if getattr(exc, "code", None) != "23505":
+                    if getattr(exc, "code", None) != "23505" and getattr(exc, "status_code", None) != 409:
                         raise
                     existing = provider.client.table("opencode_events").select("event_json").eq("event_id", event.event_id).limit(1).execute().data or []
                     if existing:
