@@ -244,18 +244,23 @@ def opencode_allowed_emails() -> frozenset[str]:
 
 
 def has_opencode_authoring_access(user: Optional[UserContext]) -> bool:
-    """Return whether this authenticated Clerk user is on the OpenCode allowlist."""
-    if user is None or user.provider != "clerk" or not user.owner_user_id:
+    """Return whether this authenticated user is on the OpenCode allowlist."""
+    if user is None or user.provider not in {"clerk", "forma-cli"} or not user.owner_user_id:
         return False
-    email = clerk_user_email(user.owner_user_id)
+    email = (
+        clerk_user_email(user.owner_user_id)
+        if user.provider == "clerk"
+        else user.claims.get("email")
+    )
     return bool(email and email.strip().lower() in opencode_allowed_emails())
 
 
 async def require_opencode_authoring_access(request: Request) -> UserContext:
-    """Require a hosted Clerk user whose primary email is explicitly allowed.
+    """Require a hosted Clerk or CLI user whose email is explicitly allowed.
 
-    This intentionally does not use admin status or either service API key. The
-    email is resolved from Clerk by the server, never accepted from the caller.
+    This intentionally does not use admin status or either service API key. For
+    CLI sessions, the email was captured from the Clerk-authenticated device
+    approval flow and stored server-side.
     """
     deployment = (config.get("FORMA_DEPLOYMENT_MODE") or "").strip().lower()
     try:
@@ -268,10 +273,10 @@ async def require_opencode_authoring_access(request: Request) -> UserContext:
             detail=_opencode_auth_error("opencode_hosted_only", "Hosted OpenCode access is unavailable."),
         )
     context = await require_user_context(request)
-    if context.provider != "clerk" or not context.owner_user_id:
+    if context.provider not in {"clerk", "forma-cli"} or not context.owner_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=_opencode_auth_error("opencode_clerk_required", "A Clerk user session is required."),
+            detail=_opencode_auth_error("opencode_user_required", "A Clerk or Forma CLI user session is required."),
         )
     if not has_opencode_authoring_access(context):
         raise HTTPException(
