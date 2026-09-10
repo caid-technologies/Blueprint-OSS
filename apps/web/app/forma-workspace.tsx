@@ -4963,7 +4963,7 @@ export function FormaWorkspace({
     const controller = new AbortController();
     const chatId = routedChatId;
     const chatSourcesReady = chatIndexLoaded && chatHistoryLoaded;
-    const storedMessages = !authRequired || (chatSourcesReady && routedChatFound)
+    const storedMessages = !authRequired || chatSourcesReady
       ? readStoredChatThread(chatId, null, chatStorageScope)
       : [];
     setActiveChatId(chatId);
@@ -4978,6 +4978,23 @@ export function FormaWorkspace({
 
     if (!chatSourcesReady) {
       setChatRouteTransition({ chatId, title: "Opening chat", projectId: "", error: null });
+      return () => {
+        controller.abort();
+      };
+    }
+
+    if (!routedChatFound && chatSourcesReady && authRequired && chatHasStarted(storedMessages)) {
+      const recoveredTitle = chatTitleFromMessages(storedMessages);
+      const recoveredItem = {
+        chatId,
+        title: recoveredTitle,
+        projectId: "",
+        createdAt: chatTimestamp(),
+        projectCount: 0,
+      };
+      setSessionChatItems((current) => mergeChatListItems([recoveredItem], current));
+      persistChatThread(chatId, storedMessages, recoveredTitle);
+      setChatRouteTransition(null);
       return () => {
         controller.abort();
       };
