@@ -258,7 +258,7 @@ def complete_opencode_command(
             event_id=f"{command.command_id}:terminal",
             kind=terminal_kind,
             status=request.status,
-            error_code="command_failed" if request.status == OpenCodeCommandStatus.FAILED else None,
+            error_code=request.error_code if request.status == OpenCodeCommandStatus.FAILED else None,
         ),
     )
     return _command_response(updated)

@@ -211,6 +211,7 @@ class ConnectorCompletion(BaseModel):
 
     lease_token: str = Field(min_length=1)
     status: Literal[OpenCodeCommandStatus.SUCCEEDED, OpenCodeCommandStatus.FAILED, OpenCodeCommandStatus.CANCELLED]
+    error_code: str | None = Field(default=None, max_length=80)
 
 
 class McpToolArguments(BaseModel):
