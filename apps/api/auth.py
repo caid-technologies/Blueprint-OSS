@@ -247,11 +247,9 @@ def has_opencode_authoring_access(user: Optional[UserContext]) -> bool:
     """Return whether this authenticated user is on the OpenCode allowlist."""
     if user is None or user.provider not in {"clerk", "forma-cli"} or not user.owner_user_id:
         return False
-    email = (
-        clerk_user_email(user.owner_user_id)
-        if user.provider == "clerk"
-        else user.claims.get("email")
-    )
+    # CLI subjects are the original Clerk user IDs; resolve the email again
+    # server-side because older device tokens may not carry email claims.
+    email = clerk_user_email(user.owner_user_id)
     return bool(email and email.strip().lower() in opencode_allowed_emails())
 
 
