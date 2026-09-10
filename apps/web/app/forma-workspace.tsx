@@ -2148,6 +2148,11 @@ export function FormaWorkspace({
 
   const detachMissingProjectFromChat = (chatId: string, projectId: string, title?: string | null) => {
     if (!chatId || !projectId) return;
+    const clearProjectReference = (items: ChatListItem[]) => items.map((item) => (
+      item.chatId === chatId ? { ...item, projectId: "", projectCount: 0 } : item
+    ));
+    setSessionChatItems(clearProjectReference);
+    setPrivateChatItems(clearProjectReference);
     setLocalChatItems((current) => {
       const existing = current.find((item) => item.chatId === chatId);
       const nextItem: ChatListItem = {
