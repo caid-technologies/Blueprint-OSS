@@ -440,11 +440,21 @@ class OpenCodeStore:
             existing = provider.client.table("opencode_events").select("event_json").eq("event_id", event.event_id).limit(1).execute().data or []
             if existing:
                 return PublicEvent.model_validate(existing[0]["event_json"])
-            session = self.get_session(event.session_id)
-            if session is None:
-                raise ValueError("OpenCode session not found.")
-            provider.client.table("opencode_events").insert({"event_id": event.event_id, "session_id": event.session_id, "owner_user_id": session.owner_user_id, "project_id": str(event.project_id), "sequence": event.sequence, "event_json": event.model_dump(mode="json"), "created_at": _timestamp(event.created_at)}).execute()
-            return event
+            for _ in range(3):
+                session = self.get_session(event.session_id)
+                if session is None:
+                    raise ValueError("OpenCode session not found.")
+                candidate = event.model_copy(update={"sequence": session.next_event_sequence})
+                try:
+                    provider.client.table("opencode_events").insert({"event_id": candidate.event_id, "session_id": candidate.session_id, "owner_user_id": session.owner_user_id, "project_id": str(candidate.project_id), "sequence": candidate.sequence, "event_json": candidate.model_dump(mode="json"), "created_at": _timestamp(candidate.created_at)}).execute()
+                    return candidate
+                except Exception as exc:
+                    if getattr(exc, "code", None) != "23505":
+                        raise
+                    existing = provider.client.table("opencode_events").select("event_json").eq("event_id", event.event_id).limit(1).execute().data or []
+                    if existing:
+                        return PublicEvent.model_validate(existing[0]["event_json"])
+            raise RuntimeError("Unable to allocate an OpenCode event sequence.")
         with self._connection() as connection:
             existing = connection.execute("SELECT event_json FROM opencode_events WHERE event_id = ?", (event.event_id,)).fetchone()
             if existing:
