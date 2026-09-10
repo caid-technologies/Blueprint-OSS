@@ -161,3 +161,24 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(store.claim_next(connector_id="mini", session_id="session_b"))
             finally:
                 store.close()
+
+    def test_store_cancels_claimed_command_without_message(self) -> None:
+        project_id = str(uuid4())
+        with patch.dict(os.environ, {"FORMA_USER_SECRETS_KEY": "test-key"}, clear=False):
+            store = OpenCodeStore(":memory:")
+            try:
+                session = store.create_session(session_id="session", connector_id="mini", owner_user_id="user", project_id=project_id)
+                store.create_command(command_id="invalid", session=session, operation=OpenCodeOperation.PROJECT_MESSAGE, idempotency_key="invalid", message="build")
+                with store._connection() as connection:
+                    connection.execute(
+                        "UPDATE opencode_commands SET message_ciphertext = NULL, message_key_id = NULL WHERE command_id = ?",
+                        ("invalid",),
+                    )
+
+                self.assertIsNone(store.claim_next(connector_id="mini", session_id="session"))
+                command = store.get_command("invalid")
+                self.assertIsNotNone(command)
+                assert command is not None
+                self.assertEqual(OpenCodeCommandStatus.CANCELLED, command.status)
+            finally:
+                store.close()

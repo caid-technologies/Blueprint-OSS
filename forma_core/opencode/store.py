@@ -341,7 +341,11 @@ class OpenCodeStore:
                 )
                 if updated:
                     updated_command = _command_from_record(updated[0])
-                    return _connector_command(updated_command, lease_token, self._command_message(updated_command))
+                    message = self._command_message(updated_command)
+                    if message is None:
+                        self.cancel_command(updated_command)
+                        continue
+                    return _connector_command(updated_command, lease_token, message)
             return None
         with self._connection(begin_immediate=True) as connection:
             row = connection.execute(
@@ -362,7 +366,11 @@ class OpenCodeStore:
             record.update(status=OpenCodeCommandStatus.LEASED.value, attempt_count=attempt_count,
                           lease_expires_at=expiry, lease_token_hash=lease_hash, updated_at=now_text)
         command = _command_from_record(record)
-        return _connector_command(command, lease_token, self._command_message(command))
+        message = self._command_message(command)
+        if message is None:
+            self.cancel_command(command)
+            return self.claim_next(connector_id=connector_id, session_id=session_id, lease_seconds=lease_seconds)
+        return _connector_command(command, lease_token, message)
 
     def heartbeat(self, command: StoredCommand, lease_token: str) -> StoredCommand:
         self._require_lease(command, lease_token)
