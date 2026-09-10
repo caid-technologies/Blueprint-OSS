@@ -73,7 +73,10 @@ def _safe_message(value: str | None) -> str | None:
 
 def _public_error(event: ConnectorEventInput) -> PublicError:
     code = event.error_code if event.error_code in _ERROR_MESSAGES else "command_failed"
-    if event.error_code and _SAFE_WORKER_ERROR_PATTERN.fullmatch(event.error_code):
+    if event.error_code == "opencode_fetch_failed":
+        code = event.error_code
+        message = "The mini-PC could not reach its local OpenCode server."
+    elif event.error_code and _SAFE_WORKER_ERROR_PATTERN.fullmatch(event.error_code):
         code = event.error_code
         message = f"OpenCode local request failed (HTTP {event.error_code[-3:]})."
     else:
