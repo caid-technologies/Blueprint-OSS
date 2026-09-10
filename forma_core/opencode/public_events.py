@@ -24,6 +24,7 @@ _ERROR_MESSAGES = {
     "command_failed": "The OpenCode project command failed.",
     "validation_failed": "The project failed Forma validation.",
 }
+_SAFE_WORKER_ERROR_PATTERN = re.compile(r"^opencode_(?:session_)?http_[45]\d{2}$")
 
 
 def project_public_event(
@@ -72,8 +73,13 @@ def _safe_message(value: str | None) -> str | None:
 
 def _public_error(event: ConnectorEventInput) -> PublicError:
     code = event.error_code if event.error_code in _ERROR_MESSAGES else "command_failed"
+    if event.error_code and _SAFE_WORKER_ERROR_PATTERN.fullmatch(event.error_code):
+        code = event.error_code
+        message = f"OpenCode local request failed (HTTP {event.error_code[-3:]})."
+    else:
+        message = _ERROR_MESSAGES.get(code, "The OpenCode project command failed.")
     return PublicError(
         code=code,
-        message=_ERROR_MESSAGES.get(code, "The OpenCode project command failed."),
+        message=message,
         correlation_id=event.correlation_id or f"event_{event.event_id}",
     )
