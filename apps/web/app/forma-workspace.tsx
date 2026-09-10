@@ -5056,6 +5056,23 @@ export function FormaWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routedChatId, currentRouteProjectId, routedChatFound, routedChatProjectId, inlineChatProjectId, chatIndexLoaded, chatHistoryLoaded, authRequired, isSignedIn, chatStorageScope]);
 
+  useEffect(() => {
+    if (!routedChatId || currentRouteProjectId || chatHistoryLoaded) return;
+    const chatId = routedChatId;
+    const timeoutId = window.setTimeout(() => {
+      setChatRouteTransition((current) => (
+        current?.chatId === chatId && !current.error
+          ? {
+              ...current,
+              title: "Chat unavailable",
+              error: "The chat workspace could not finish loading. Please return home and try again.",
+            }
+          : current
+      ));
+    }, 10000);
+    return () => window.clearTimeout(timeoutId);
+  }, [routedChatId, currentRouteProjectId, chatHistoryLoaded]);
+
   const findProjectForJob = (job: A2AJob) => {
     const projectId = job.result_summary?.project_id;
     if (projectId) {

@@ -131,6 +131,7 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
                 public = project_public_event(ConnectorEventInput(event_id="event", kind="working"), sequence=1, session_id="session", project_id=UUID(project_id))
                 reopened.add_event(public)
                 self.assertEqual(1, len(reopened.list_events("session", 0, 10)))
+                self.assertEqual(2, reopened.next_event_sequence("session"))
             finally:
                 reopened.close()
 
