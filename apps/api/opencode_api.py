@@ -247,6 +247,20 @@ def complete_opencode_command(
         updated = OPENCODE_STORE.complete(command, request.lease_token, request.status)
     except PermissionError as exc:
         raise _http_error(403, "opencode_lease_invalid", "The command lease is invalid or expired.") from exc
+    terminal_kind = {
+        OpenCodeCommandStatus.SUCCEEDED: OpenCodeEventKind.COMPLETED.value,
+        OpenCodeCommandStatus.FAILED: OpenCodeEventKind.FAILED.value,
+        OpenCodeCommandStatus.CANCELLED: OpenCodeEventKind.CANCELLED.value,
+    }[request.status]
+    _store_event(
+        _scoped_connector_session(_connector_capability(capability or _bearer(authorization), scope="complete")),
+        ConnectorEventInput(
+            event_id=f"{command.command_id}:terminal",
+            kind=terminal_kind,
+            status=request.status,
+            error_code="command_failed" if request.status == OpenCodeCommandStatus.FAILED else None,
+        ),
+    )
     return _command_response(updated)
 
 
