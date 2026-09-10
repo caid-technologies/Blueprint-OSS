@@ -33,7 +33,7 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as denied:
                 asyncio.run(require_opencode_authoring_access(object()))
         self.assertEqual(403, denied.exception.status_code)
-        self.assertEqual("opencode_clerk_required", denied.exception.detail["code"])
+        self.assertEqual("opencode_user_required", denied.exception.detail["code"])
 
     def test_runtime_authoring_access_is_limited_to_the_exact_allowlisted_email(self) -> None:
         allowed = UserContext(provider="clerk", subject="user_1", owner_user_id="user_1", is_authenticated=True, is_admin=False)
@@ -44,6 +44,18 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertTrue(has_opencode_authoring_access(allowed))
             self.assertFalse(has_opencode_authoring_access(denied))
+
+    def test_allowlisted_cli_identity_can_use_runtime_authoring_access(self) -> None:
+        user = UserContext(
+            provider="forma-cli",
+            subject="user_1",
+            owner_user_id="user_1",
+            is_authenticated=True,
+            is_admin=False,
+            claims={"email": "isayahculbertson@gmail.com"},
+        )
+        with patch.dict(os.environ, {"FORMA_OPENCODE_ALLOWED_EMAILS": "isayahculbertson@gmail.com"}, clear=True):
+            self.assertTrue(has_opencode_authoring_access(user))
 
     def test_allowlisted_runtime_config_falls_back_when_user_settings_are_unreadable(self) -> None:
         user = UserContext(provider="clerk", subject="user_1", owner_user_id="user_1", is_authenticated=True, is_admin=False)
