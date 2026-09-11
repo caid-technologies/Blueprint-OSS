@@ -245,7 +245,11 @@ def opencode_allowed_emails() -> frozenset[str]:
 
 def has_opencode_authoring_access(user: Optional[UserContext]) -> bool:
     """Return whether this authenticated user is on the OpenCode allowlist."""
-    if user is None or user.provider not in {"clerk", "forma-cli"} or not user.owner_user_id:
+    if user is None or not user.owner_user_id:
+        return False
+    if user.provider == "local":
+        return (config.get("FORMA_OPENCODE_ALLOW_LOCAL") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if user.provider not in {"clerk", "forma-cli"}:
         return False
     # CLI subjects are the original Clerk user IDs; resolve the email again
     # server-side because older device tokens may not carry email claims.
@@ -265,13 +269,14 @@ async def require_opencode_authoring_access(request: Request) -> UserContext:
         clerk_required = deployed_auth_required()
     except RuntimeError:
         clerk_required = False
-    if deployment not in {"hosted", "production", "prod"} or not clerk_required:
+    local_allowed = (config.get("FORMA_OPENCODE_ALLOW_LOCAL") or "").strip().lower() in {"1", "true", "yes", "on"} and deployment == "local"
+    if (deployment not in {"hosted", "production", "prod"} or not clerk_required) and not local_allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_opencode_auth_error("opencode_hosted_only", "Hosted OpenCode access is unavailable."),
         )
     context = await require_user_context(request)
-    if context.provider not in {"clerk", "forma-cli"} or not context.owner_user_id:
+    if (context.provider not in {"clerk", "forma-cli"} and not local_allowed) or not context.owner_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=_opencode_auth_error("opencode_user_required", "A Clerk or Forma CLI user session is required."),
@@ -456,7 +461,11 @@ def mcp_context_is_authorized(user_context: Optional[UserContext]) -> bool:
     return bool(
         user_context
         and user_context.is_authenticated
-        and (user_context.is_admin or user_context.provider in MCP_SERVICE_PROVIDERS)
+        and (
+            user_context.is_admin
+            or user_context.provider in MCP_SERVICE_PROVIDERS
+            or user_context.provider in {"clerk", "forma-cli"}
+        )
     )
 
 
@@ -597,7 +606,7 @@ async def require_mcp_user_context(request: Request) -> UserContext:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is required for MCP transports.",
         )
-    return await require_admin_user_context(request)
+    return await require_user_context(request)
 
 
 async def require_deployed_clerk_auth(request: Request) -> Optional[Dict[str, Any]]:
