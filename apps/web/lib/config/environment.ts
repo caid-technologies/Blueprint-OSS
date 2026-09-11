@@ -9,7 +9,7 @@ export const webConfig = {
   apiBaseUrl:
     process.env.NEXT_PUBLIC_API_URL ||
     process.env.NEXT_PUBLIC_BACKEND_URL ||
-    (development ? "http://127.0.0.1:8000" : ""),
+    (development ? "http://127.0.0.1:8000" : "https://mcp.caid-technologies.us"),
   openCadBaseUrl:
     process.env.NEXT_PUBLIC_OPENCAD_URL ||
     (development ? "http://127.0.0.1:8000" : ""),
