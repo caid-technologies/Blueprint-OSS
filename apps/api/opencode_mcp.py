@@ -14,6 +14,7 @@ from forma_core.opencode.capabilities import ConnectorCapability
 from forma_core.opencode.models import (
     McpJsonRpcRequest,
     McpToolArguments,
+    McpToolCallParams,
     ProjectToolResult,
 )
 from forma_core.database import get_latest_project_revision, get_project_revision_by_source_job
@@ -83,6 +84,7 @@ async def _handle_request(request: McpJsonRpcRequest, capability: ConnectorCapab
         return _result(request_id, {"tools": opencode_mcp_tools()})
     if method != "tools/call":
         return _error(request_id, -32601, "The requested MCP method was not found.", "mcp_method_not_found")
+    assert isinstance(params, McpToolCallParams)
     tool_name = params.name
     arguments = params.arguments
     if not tool_name:
