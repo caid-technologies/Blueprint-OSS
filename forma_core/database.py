@@ -168,10 +168,15 @@ def _warn_ignored_database_urls() -> None:
 
 def _build_supabase_client(url: str, key: str):
     try:
+        import httpx
         from supabase import create_client
+        from supabase.lib.client_options import SyncClientOptions
     except ImportError as exc:
         raise RuntimeError("Supabase client is not installed. Run pip install -r apps/api/requirements.txt.") from exc
-    return create_client(url, key)
+    # The sync Supabase client enables HTTP/2 by default, but its httpcore stream
+    # bookkeeping is not safe when shared by FastAPI's concurrent worker threads.
+    http_client = httpx.Client(http2=False, follow_redirects=True, timeout=120)
+    return create_client(url, key, options=SyncClientOptions(httpx_client=http_client))
 
 
 def _select_database_config() -> tuple[DatabaseConfig, Any, Any]:
