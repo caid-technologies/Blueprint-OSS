@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationInfo, field_validator
 
 from forma_core.workspaces.projects.models import HardwareIR, ValidationIssue
 
@@ -221,8 +221,60 @@ class McpToolArguments(BaseModel):
 
 
 class McpRequestParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
+    meta: dict[str, JsonValue] | None = Field(default=None, alias="_meta")
+
+
+class McpIcon(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    src: str
+    mime_type: str | None = Field(default=None, alias="mimeType")
+    sizes: list[str] | None = None
+    theme: Literal["light", "dark"] | None = None
+
+
+class McpClientInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: str
+    version: str
+    title: str | None = None
+    description: str | None = None
+    website_url: str | None = Field(default=None, alias="websiteUrl")
+    icons: list[McpIcon] | None = None
+
+
+class McpRootsCapability(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    list_changed: bool | None = Field(default=None, alias="listChanged")
+
+
+class McpClientCapabilities(BaseModel):
+    """Known client capabilities plus the protocol's open extension boundary."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    __pydantic_extra__: dict[str, JsonValue] = Field(init=False)
+    roots: McpRootsCapability | None = None
+    sampling: dict[str, JsonValue] | None = None
+    elicitation: dict[str, JsonValue] | None = None
+    experimental: dict[str, dict[str, JsonValue]] | None = None
+
+
+class McpInitializeParams(McpRequestParams):
+    protocol_version: str = Field(alias="protocolVersion")
+    capabilities: McpClientCapabilities
+    client_info: McpClientInfo = Field(alias="clientInfo")
+
+
+class McpToolsListParams(McpRequestParams):
+    cursor: str | None = None
+
+
+class McpToolCallParams(McpRequestParams):
     name: str | None = None
     arguments: McpToolArguments = Field(default_factory=McpToolArguments)
 
@@ -233,7 +285,22 @@ class McpJsonRpcRequest(BaseModel):
     jsonrpc: Literal["2.0"]
     id: str | int | None = None
     method: str
-    params: McpRequestParams = Field(default_factory=McpRequestParams)
+    params: McpInitializeParams | McpToolsListParams | McpToolCallParams | McpRequestParams = Field(
+        default_factory=dict, validate_default=True,
+    )
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def normalize_params(cls, value: object, info: ValidationInfo) -> McpRequestParams:
+        # Select by method before union validation, including when params is omitted.
+        params_model = {
+            "initialize": McpInitializeParams,
+            "tools/list": McpToolsListParams,
+            "tools/call": McpToolCallParams,
+        }.get(info.data.get("method"), McpRequestParams)
+        if isinstance(value, McpRequestParams):
+            value = value.model_dump(by_alias=True)
+        return params_model.model_validate(value)
 
 
 class ProjectToolResult(BaseModel):
