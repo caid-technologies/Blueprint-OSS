@@ -162,6 +162,14 @@ class PersistenceArchitectureTests(unittest.TestCase):
         self.assertIn("remix_project_id", client.projections["project_remixes"])
         self.assertIn("project_id", client.projections["project_saves"])
 
+    def test_supabase_client_uses_http1_transport_for_concurrent_sync_requests(self) -> None:
+        with patch("supabase.create_client") as create_client, patch("httpx.Client") as http_client:
+            database._build_supabase_client("https://example.supabase.co", "secret")
+
+        http_client.assert_called_once_with(http2=False, follow_redirects=True, timeout=120)
+        options = create_client.call_args.kwargs["options"]
+        self.assertIs(options.httpx_client, http_client.return_value)
+
     def test_supabase_provider_propagates_original_readiness_error(self) -> None:
         failure = ConnectionError("[Errno 111] Connection refused")
         client = _SchemaClient(
