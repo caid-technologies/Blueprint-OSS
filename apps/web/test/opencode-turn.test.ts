@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { reduceOpenCodeTurn, type OpenCodeEvent, type OpenCodeTurnState } from "../lib/opencode.ts";
+
+const initial: OpenCodeTurnState = {
+  content: "Waiting for OpenCode.",
+  assistantMessage: null,
+  status: "loading",
+  terminalEvent: null,
+};
+
+function event(kind: OpenCodeEvent["kind"], overrides: Partial<OpenCodeEvent> = {}): OpenCodeEvent {
+  return {
+    kind, event_id: "command:terminal", sequence: 1, session_id: "session",
+    project_id: "reserved-project", status: null, message: null, revision_id: null,
+    error: null, created_at: "2026-09-12T00:00:00Z", ...overrides,
+  };
+}
+
+test("connector unavailability is recoverable and never completes the turn", () => {
+  const waiting = reduceOpenCodeTurn(initial, event("connector_unavailable"), "command");
+  assert.equal(waiting.status, "loading");
+  assert.equal(waiting.terminalEvent, null);
+  assert.match(waiting.content, /reconnect/);
+  const working = reduceOpenCodeTurn(waiting, event("working"), "command");
+  assert.match(working.content, /working/);
+  assert.equal(working.terminalEvent, null);
+});
+
+test("assistant text survives progress, reconnect, and completion in the same event page", () => {
+  const events = [
+    event("assistant_message", { event_id: "answer", message: "Hello!" }),
+    event("progress"), event("connector_unavailable"), event("completed"),
+  ];
+  const result = events.reduce((state, next) => reduceOpenCodeTurn(state, next, "command"), initial);
+  assert.equal(result.content, "Hello!");
+  assert.equal(result.status, "success");
+  assert.equal(result.terminalEvent?.kind, "completed");
+  assert.equal("projectId" in result, false);
+});
+
+test("completion without an answer does not claim a project was created", () => {
+  const result = reduceOpenCodeTurn(initial, event("completed"), "command");
+  assert.equal(result.content, "OpenCode finished responding.");
+  assert.equal("projectId" in result, false);
+});
+
+test("late terminal events from a prior command do not stop the next turn", () => {
+  assert.equal(reduceOpenCodeTurn(initial, event("completed", { event_id: "prior:terminal" }), "command"), initial);
+});
+
+test("failure and cancellation finish without attaching the reserved project", () => {
+  for (const kind of ["failed", "cancelled"] as const) {
+    const result = reduceOpenCodeTurn(initial, event(kind), "command");
+    assert.equal(result.status, kind === "failed" ? "error" : "cancelled");
+    assert.equal(result.terminalEvent?.kind, kind);
+    assert.equal("projectId" in result, false);
+  }
+  const cancelled = reduceOpenCodeTurn(initial, event("cancelled", { event_id: "cancelled_session" }), "command");
+  assert.equal(cancelled.status, "cancelled");
+});
+
+test("historical availability events after completion do not erase success", () => {
+  const completed = reduceOpenCodeTurn(initial, event("completed"), "command");
+  assert.equal(reduceOpenCodeTurn(completed, event("connector_unavailable"), "command"), completed);
+});

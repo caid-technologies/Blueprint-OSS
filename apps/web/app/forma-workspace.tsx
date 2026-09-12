@@ -16,8 +16,10 @@ import {
   cancelOpenCodeSession,
   createOpenCodeSession,
   listOpenCodeEvents,
+  reduceOpenCodeTurn,
   submitOpenCodeCommand,
-  type OpenCodeEvent,
+  type OpenCodeSession,
+  type OpenCodeTurnState,
 } from "../lib/opencode";
 import { authoringModeEnabled, usableRuntimeLlmOptions, webConfig, type RuntimeConfigContract } from "../lib/config";
 import { calculateProjectCostMetrics, resolveProjectComponentInstances } from "../lib/project-cost-metrics";
@@ -1832,9 +1834,13 @@ export function FormaWorkspace({
   const pipelineStepsLastRequestedWorkflowRef = useRef<string | null>(null);
   const recoveryJobMissesRef = useRef(new Map<string, { misses: number; retryAfter: number }>());
   const activeGenerationRef = useRef<ActiveGenerationRun | null>(null);
-  const openCodeSessionsRef = useRef<Record<string, string>>({});
+  const openCodeSessionsRef = useRef<Record<string, OpenCodeSession>>({});
   const openCodeCursorsRef = useRef<Record<string, number>>({});
   const openCodePollTimersRef = useRef<Record<string, number>>({});
+  const activeChatIdRef = useRef(activeChatId);
+  useLayoutEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
   const visibleChatSourceProjects = myProjectHistory;
   const visibleChatSourceItems = useMemo(
     () => authRequired
@@ -1990,9 +1996,9 @@ export function FormaWorkspace({
     );
   };
 
-  const ensureChatThread = (projectId: string | null, ir: any, sourcePrompt?: string | null) => {
+  const ensureChatThread = (projectId: string | null, ir: any, sourcePrompt?: string | null, routedChatId?: string) => {
     if (!projectId) return;
-    const chatId = chatIdFromIR(ir) || projectId;
+    const chatId = routedChatId || chatIdFromIR(ir) || projectId;
     setActiveChatId(chatId);
     setChatThreads((current) => {
       if (current[chatId]?.length) return current;
@@ -2604,7 +2610,7 @@ export function FormaWorkspace({
   };
 
   const goHome = () => {
-    if (!hostedChatEnabled) {
+    if (chatReadOnly) {
       setChatRouteTransition(null);
       setProjectIR(null);
       setActiveTab("overview");
@@ -2622,7 +2628,7 @@ export function FormaWorkspace({
   };
 
   const startNewProjectChat = () => {
-    if (!requireHostedChatEnabled()) return;
+    if (!authoringMode && !requireHostedChatEnabled()) return;
     if (homeView === "chat" && !currentRouteProjectId && !currentProjectChatHasStarted()) return;
     const nextChatId = resetToNewProjectChat();
     router.push(chatRoute(nextChatId));
@@ -4694,30 +4700,43 @@ export function FormaWorkspace({
 
   const loadOldProject = async (
     projectId: string,
-    options: { syncRoute?: boolean; signal?: AbortSignal; tab?: string | null; hydrateChat?: boolean } = {}
+    options: { syncRoute?: boolean; signal?: AbortSignal; tab?: string | null; hydrateChat?: boolean; chatId?: string; retryTransient?: boolean } = {}
   ): Promise<boolean> => {
     if (options.signal?.aborted) return false;
 
     const shouldSyncRoute = options.syncRoute ?? true;
     const signal = options.signal;
-    setIsLoading(true);
+    const isVisibleChat = () => !options.chatId || activeChatIdRef.current === options.chatId;
+    if (isVisibleChat()) setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/projects/${encodeURIComponent(projectId)}`, {
-        signal,
-        headers: await optionalAuthHeaders(),
-      });
-      if (!res.ok) return false;
+      let res: Response | undefined;
+      const attempts = options.retryTransient ? 3 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          res = await fetch(`${API_URL}/projects/${encodeURIComponent(projectId)}`, {
+            signal,
+            headers: await optionalAuthHeaders(),
+          });
+        } catch (error) {
+          if (signal?.aborted || attempt === attempts - 1) throw error;
+        }
+        if (res && res.status !== 429 && res.status < 500) break;
+        if (attempt < attempts - 1) await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      }
+      if (!res?.ok) return false;
 
       const data = await res.json();
       if (signal?.aborted) return false;
 
       const ir = withProjectResponseMetadata(data.project_ir, data);
-      setProjectIR(ir);
-      if (options.hydrateChat && canChatWithProjectIR(ir)) {
-        ensureChatThread(projectId, ir, data.prompt);
+      if (isVisibleChat()) {
+        setProjectIR(ir);
+        if (options.hydrateChat && canChatWithProjectIR(ir)) {
+          ensureChatThread(projectId, ir, data.prompt, options.chatId);
+        }
+        setActiveTab(normalizeTab(options.tab || "") || "overview");
+        if (shouldSyncRoute) syncProjectRoute(projectId);
       }
-      setActiveTab(normalizeTab(options.tab || "") || "overview");
-      if (shouldSyncRoute) syncProjectRoute(projectId);
       return true;
     } catch (error) {
       const errorName = error instanceof Error ? error.name : "";
@@ -4726,49 +4745,25 @@ export function FormaWorkspace({
       }
       return false;
     } finally {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && isVisibleChat()) {
         setIsLoading(false);
       }
     }
   };
 
-  const openCodeEventPatch = (event: OpenCodeEvent): Partial<ChatMessage> => {
-    if (event.kind === "assistant_message" && event.message) {
-      return { content: event.message, status: "loading" };
-    }
-    if (event.kind === "completed") {
-      return {
-        content: "OpenCode finished authoring this project.",
-        status: "success",
-        projectId: event.project_id,
-      };
-    }
-    if (event.kind === "failed") {
-      return {
-        content: event.error?.message || "OpenCode could not complete this project change.",
-        status: "error",
-        projectId: event.project_id,
-      };
-    }
-    if (event.kind === "cancelled") {
-      return { content: "OpenCode authoring was stopped.", status: "cancelled", projectId: event.project_id };
-    }
-    if (event.kind === "connector_unavailable") {
-      return { content: "The local OpenCode connector is unavailable. Start it and try again.", status: "error" };
-    }
-    if (event.kind === "validating") return { content: "OpenCode is validating the project.", status: "loading" };
-    if (event.kind === "working" || event.kind === "progress" || event.kind === "queued") {
-      return { content: "OpenCode is authoring this project.", status: "loading" };
-    }
-    return {};
-  };
-
   const pollOpenCodeTurn = (turn: {
     chatId: string;
     sessionId: string;
+    commandId: string;
     assistantMessageId: string;
     run: ActiveGenerationRun;
   }) => {
+    let state: OpenCodeTurnState = {
+      assistantMessage: null,
+      content: "Waiting for OpenCode.",
+      status: "loading",
+      terminalEvent: null,
+    };
     const poll = async () => {
       if (turn.run.cancelled || turn.run.controller.signal.aborted) return;
       try {
@@ -4778,29 +4773,45 @@ export function FormaWorkspace({
           turn.sessionId,
           openCodeCursorsRef.current[turn.sessionId] || 0,
         );
+        if (turn.run.cancelled || turn.run.controller.signal.aborted) return;
         openCodeCursorsRef.current[turn.sessionId] = page.next_cursor;
-        let terminalEvent: OpenCodeEvent | null = null;
         for (const event of page.events) {
           if (event.session_id !== turn.sessionId) continue;
-          const patch = openCodeEventPatch(event);
-          updateThreadMessage(turn.chatId, turn.assistantMessageId, patch);
-          if (activeChatId === turn.chatId) updateChatMessage(turn.assistantMessageId, patch);
-          if (["completed", "failed", "cancelled", "connector_unavailable"].includes(event.kind)) terminalEvent = event;
+          state = reduceOpenCodeTurn(state, event, turn.commandId);
         }
+        const patch = { content: state.content, status: state.status };
+        updateThreadMessage(turn.chatId, turn.assistantMessageId, patch);
+        if (activeChatIdRef.current === turn.chatId) updateChatMessage(turn.assistantMessageId, patch);
+        const terminalEvent = state.terminalEvent;
         if (terminalEvent) {
           delete openCodePollTimersRef.current[turn.sessionId];
           if (terminalEvent.kind === "cancelled") delete openCodeSessionsRef.current[turn.chatId];
           if (terminalEvent.kind === "completed") {
-            rememberChatItem({
+            // A successful conversation need not create a project. Probe before linking it.
+            const projectLoaded = await loadOldProject(terminalEvent.project_id, {
+              syncRoute: false,
+              tab: "chat",
+              signal: turn.run.controller.signal,
               chatId: turn.chatId,
-              title: projectTitle || "OpenCode project",
-              projectId: terminalEvent.project_id,
-              createdAt: chatTimestamp(),
-              projectCount: 1,
+              retryTransient: true,
             });
-            void loadOldProject(terminalEvent.project_id, { syncRoute: false, tab: "chat", hydrateChat: true });
-            refreshProjectAndChatLists();
+            if (turn.run.cancelled || turn.run.controller.signal.aborted) return;
+            if (projectLoaded) {
+              contextProjectIdsRef.current[turn.chatId] = terminalEvent.project_id;
+              rememberChatItem({
+                chatId: turn.chatId,
+                title: projectTitle || "OpenCode project",
+                projectId: terminalEvent.project_id,
+                createdAt: chatTimestamp(),
+                projectCount: 1,
+              });
+              const projectPatch = { ...patch, projectId: terminalEvent.project_id };
+              updateThreadMessage(turn.chatId, turn.assistantMessageId, projectPatch);
+              if (activeChatIdRef.current === turn.chatId) updateChatMessage(turn.assistantMessageId, projectPatch);
+              refreshProjectAndChatLists();
+            }
           }
+          if (activeChatIdRef.current === turn.chatId) setGenerationInputNotice(null);
           finishGenerationRun(turn.run);
           return;
         }
@@ -4837,30 +4848,18 @@ export function FormaWorkspace({
     try {
       const headers = await generationRequestHeaders();
       let session = openCodeSessionsRef.current[chatId];
-      let sessionProjectId = projectId || null;
       if (!session) {
-        const created = await createOpenCodeSession(API_URL, headers, openCodeConnectorId, projectId);
-        session = created.session_id;
-        sessionProjectId = created.project_id;
+        session = await createOpenCodeSession(API_URL, headers, openCodeConnectorId, projectId);
         openCodeSessionsRef.current[chatId] = session;
-        openCodeCursorsRef.current[session] = 0;
-        run.openCodeSessionId = session;
-        contextProjectIdsRef.current[chatId] = created.project_id;
-        rememberChatItem({
-          chatId,
-          title: projectTitle || message,
-          projectId: created.project_id,
-          createdAt: chatTimestamp(),
-          projectCount: 1,
-        });
+        openCodeCursorsRef.current[session.session_id] = 0;
       }
-      run.projectId = sessionProjectId;
-      run.openCodeSessionId = session;
-      const command = await submitOpenCodeCommand(API_URL, headers, session, message);
+      run.projectId = session.project_id;
+      run.openCodeSessionId = session.session_id;
+      const command = await submitOpenCodeCommand(API_URL, headers, session.session_id, message);
       run.jobId = command.command_id;
       setActiveGeneration({ kind: run.kind, jobId: command.command_id });
       setGenerationInputNotice("Sent to OpenCode. Live authoring status will appear here.");
-      pollOpenCodeTurn({ chatId, sessionId: session, assistantMessageId, run });
+      pollOpenCodeTurn({ chatId, sessionId: session.session_id, commandId: command.command_id, assistantMessageId, run });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "OpenCode could not accept this request.";
       updateChatMessage(assistantMessageId, { content: messageText, status: "error" });
@@ -4894,7 +4893,7 @@ export function FormaWorkspace({
         const ir = withProjectResponseMetadata(data.project_ir, data);
         setProjectIR(ir);
         if (canChatWithProjectIR(ir)) {
-          ensureChatThread(inlineChatProjectId, ir, data.prompt);
+          ensureChatThread(inlineChatProjectId, ir, data.prompt, currentRouteChatId ? safeDecodeChatId(currentRouteChatId) : undefined);
         }
         setActiveTab("overview");
       } catch (error) {
@@ -5049,6 +5048,7 @@ export function FormaWorkspace({
       signal: controller.signal,
       tab: "chat",
       hydrateChat: true,
+      chatId,
     }).then((loaded) => {
       if (controller.signal.aborted) return;
       if (loaded) {
@@ -5207,7 +5207,7 @@ export function FormaWorkspace({
     ? (chatIdFromIR(projectIR) || currentProjectId)
     : null;
   const currentProjectChatId = projectIR
-    ? routedProjectId ? null : (ownerProjectChatId || activeChatId)
+    ? routedProjectId ? null : (routedChatId || ownerProjectChatId || activeChatId)
     : activeChatId;
   const currentProjectChatMessages = useMemo(
     () => currentProjectChatId ? chatThreads[currentProjectChatId] || [] : [],

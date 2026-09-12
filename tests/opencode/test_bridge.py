@@ -5,19 +5,19 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
 from apps.api.auth import UserContext, has_opencode_authoring_access, require_opencode_authoring_access
 from apps.api.main import _runtime_config_settings
-from apps.api.opencode_api import _require_owned_project
+from apps.api.opencode_api import _record_connector_unavailable_if_stale, _require_owned_project, list_opencode_events
 from apps.api.opencode_mcp import handle_opencode_mcp_json_rpc, opencode_mcp_tools
 from forma_core.opencode.capabilities import CapabilityError, issue_capability, verify_capability
-from forma_core.opencode.models import ConnectorEventInput, McpJsonRpcRequest, OpenCodeCommandStatus, OpenCodeEventKind, OpenCodeOperation
+from forma_core.opencode.models import ConnectorEventInput, McpJsonRpcRequest, OpenCodeCommandStatus, OpenCodeEventKind, OpenCodeOperation, OpenCodeSessionStatus
 from forma_core.opencode.public_events import project_public_event
-from forma_core.opencode.store import OpenCodeStore
+from forma_core.opencode.store import OpenCodeStore, StoredSession
 
 
 class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
@@ -120,6 +120,59 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
             capability = ConnectorCapability("mini", "session", str(uuid4()), "user", int(datetime.now(timezone.utc).timestamp()) + 60, "nonce", frozenset({"mcp"}))
             response = asyncio.run(handle_opencode_mcp_json_rpc(McpJsonRpcRequest.model_validate({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "forma.generate_project", "arguments": {}}}), capability))
         self.assertEqual("authorization_required", response["error"]["data"]["code"])
+
+    def test_connector_unavailable_respects_session_freshness(self) -> None:
+        now = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
+        fresh = "2026-09-12T11:58:00.000001Z"
+        boundary = "2026-09-12T11:58:00Z"
+        stale = "2026-09-12T11:00:00+00:00"
+        cases = (
+            ("new session", now.isoformat(), None, OpenCodeSessionStatus.ACTIVE, False),
+            ("missing heartbeat within grace", fresh, None, OpenCodeSessionStatus.ACTIVE, False),
+            ("missing heartbeat at boundary", boundary, None, OpenCodeSessionStatus.ACTIVE, True),
+            ("missing heartbeat past grace", stale, None, OpenCodeSessionStatus.ACTIVE, True),
+            ("old creation recent heartbeat", stale, fresh, OpenCodeSessionStatus.ACTIVE, False),
+            ("heartbeat at boundary", stale, boundary, OpenCodeSessionStatus.ACTIVE, True),
+            ("stale heartbeat", stale, stale, OpenCodeSessionStatus.ACTIVE, True),
+            ("malformed heartbeat", stale, "invalid", OpenCodeSessionStatus.ACTIVE, False),
+            ("malformed creation", "invalid", None, OpenCodeSessionStatus.ACTIVE, False),
+            ("cancelled without heartbeat", stale, None, OpenCodeSessionStatus.CANCELLED, False),
+            ("completed without heartbeat", stale, None, OpenCodeSessionStatus.COMPLETED, False),
+            ("cancelled stale heartbeat", stale, stale, OpenCodeSessionStatus.CANCELLED, False),
+            ("completed stale heartbeat", stale, stale, OpenCodeSessionStatus.COMPLETED, False),
+        )
+        for name, created_at, heartbeat, status, unavailable in cases:
+            with self.subTest(name=name):
+                session = StoredSession(
+                    session_id="session", connector_id="mini", owner_user_id="user", project_id=str(uuid4()),
+                    status=status, capability_nonce="nonce", created_at=created_at, updated_at=now.isoformat(),
+                    last_heartbeat_at=heartbeat, next_event_sequence=1,
+                )
+                with patch("apps.api.opencode_api.datetime", new=Mock(wraps=datetime)) as clock, patch("apps.api.opencode_api._store_event") as store_event:
+                    clock.now.return_value = now
+                    _record_connector_unavailable_if_stale(session)
+                if unavailable:
+                    store_event.assert_called_once_with(
+                        session,
+                        ConnectorEventInput(event_id="connector_unavailable_session", kind=OpenCodeEventKind.CONNECTOR_UNAVAILABLE.value),
+                    )
+                else:
+                    store_event.assert_not_called()
+
+    def test_list_events_for_new_session_does_not_record_connector_unavailable(self) -> None:
+        store = OpenCodeStore(":memory:")
+        try:
+            session = store.create_session(session_id="session", connector_id="mini", owner_user_id="user", project_id=str(uuid4()))
+            self.assertIsNone(session.last_heartbeat_at)
+            user = UserContext(provider="clerk", subject="user", owner_user_id="user", is_authenticated=True, is_admin=False)
+            with patch("apps.api.opencode_api.OPENCODE_STORE", new=store), patch("apps.api.opencode_api.datetime", new=Mock(wraps=datetime)) as clock:
+                clock.now.return_value = datetime.fromisoformat(session.created_at.replace("Z", "+00:00"))
+                page = list_opencode_events(session.session_id, cursor=0, limit=50, user=user)
+            self.assertEqual((), page.events)
+            self.assertEqual(0, page.next_cursor)
+            self.assertEqual([], store.list_events(session.session_id, 0, 50))
+        finally:
+            store.close()
 
     def test_store_is_idempotent_leased_and_cursorable(self) -> None:
         project_id = str(uuid4())

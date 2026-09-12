@@ -32,6 +32,47 @@ type OpenCodeEventPage = {
   next_cursor: number;
 };
 
+export type OpenCodeTurnState = {
+  assistantMessage: string | null;
+  content: string;
+  status: "loading" | "success" | "error" | "cancelled";
+  terminalEvent: OpenCodeEvent | null;
+};
+
+export function reduceOpenCodeTurn(
+  state: OpenCodeTurnState,
+  event: OpenCodeEvent,
+  commandId: string,
+): OpenCodeTurnState {
+  if (state.terminalEvent) return state;
+  if (event.kind === "connector_unavailable") {
+    return {
+      ...state,
+      content: state.assistantMessage || "Waiting for the OpenCode connector to reconnect. You can stop this request at any time.",
+    };
+  }
+  if (event.kind === "assistant_message" && event.message) {
+    return { ...state, assistantMessage: event.message, content: event.message };
+  }
+  if (event.kind === "completed" || event.kind === "failed" || event.kind === "cancelled") {
+    // A prior command's terminal event must not finish the current turn.
+    if (event.event_id !== `${commandId}:terminal` && event.event_id !== `cancelled_${event.session_id}`) return state;
+    const status = event.kind === "completed" ? "success" : event.kind === "failed" ? "error" : "cancelled";
+    const content = event.kind === "completed"
+      ? state.assistantMessage || "OpenCode finished responding."
+      : event.kind === "failed"
+        ? event.error?.message || "OpenCode could not complete this request."
+        : "OpenCode was stopped.";
+    return { ...state, content, status, terminalEvent: event };
+  }
+  return {
+    ...state,
+    content: state.assistantMessage || (event.kind === "validating"
+      ? "OpenCode is validating the project."
+      : "OpenCode is working on your request."),
+  };
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("OpenCode returned an invalid response.");
