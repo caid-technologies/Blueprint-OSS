@@ -183,13 +183,21 @@ class OpenCodeStore:
         return _session_from_record(dict(row)) if row else None
 
     def touch_session(self, session_id: str) -> None:
+        provider = self._ensure_provider()
+        if isinstance(provider, SupabaseProvider):
+            provider.client.table("opencode_sessions").update({"last_heartbeat_at": _timestamp()}).eq("session_id", session_id).execute()
+            return
+        with self._connection() as connection:
+            connection.execute("UPDATE opencode_sessions SET last_heartbeat_at = ? WHERE session_id = ?", (_timestamp(), session_id))
+
+    def touch_session_activity(self, session_id: str) -> None:
         now = _timestamp()
         provider = self._ensure_provider()
         if isinstance(provider, SupabaseProvider):
-            provider.client.table("opencode_sessions").update({"last_heartbeat_at": now, "updated_at": now}).eq("session_id", session_id).execute()
+            provider.client.table("opencode_sessions").update({"updated_at": now}).eq("session_id", session_id).execute()
             return
         with self._connection() as connection:
-            connection.execute("UPDATE opencode_sessions SET last_heartbeat_at = ?, updated_at = ? WHERE session_id = ?", (now, now, session_id))
+            connection.execute("UPDATE opencode_sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
 
     def create_command(
         self,
@@ -208,6 +216,7 @@ class OpenCodeStore:
             if existing.message_ciphertext is None or existing.message_key_id is None:
                 ciphertext, key_id = encrypt_user_secret_text(message)
                 self._update_command_message(existing.command_id, ciphertext, key_id)
+            self.touch_session_activity(session.session_id)
             return existing
         now = _timestamp()
         ciphertext, key_id = encrypt_user_secret_text(message)
@@ -242,6 +251,7 @@ class OpenCodeStore:
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     tuple(command.as_record().values()),
                 )
+        self.touch_session_activity(session.session_id)
         return command
 
     def find_command(self, session_id: str, idempotency_key: str) -> StoredCommand | None:
@@ -274,7 +284,8 @@ class OpenCodeStore:
             row = connection.execute("SELECT * FROM opencode_commands WHERE command_id = ?", (command_id,)).fetchone()
         return _command_from_record(dict(row)) if row else None
 
-    def list_connector_sessions(self, connector_id: str) -> list[StoredSession]:
+    def list_connector_sessions(self, connector_id: str, *, idle_after_seconds: int = 900) -> list[StoredSession]:
+        cutoff = _now() - timedelta(seconds=max(1, idle_after_seconds))
         provider = self._ensure_provider()
         if isinstance(provider, SupabaseProvider):
             rows = (
@@ -287,13 +298,15 @@ class OpenCodeStore:
                 .data
                 or []
             )
-            return [_session_from_record(row) for row in rows]
+            sessions = [_session_from_record(row) for row in rows]
+            return [session for session in sessions if (_parse_timestamp(session.updated_at) or cutoff) >= cutoff]
         with closing(provider.connect_dbapi()) as connection:
             rows = connection.execute(
                 "SELECT * FROM opencode_sessions WHERE connector_id = ? AND status = ? ORDER BY created_at",
                 (connector_id, OpenCodeSessionStatus.ACTIVE.value),
             ).fetchall()
-        return [_session_from_record(dict(row)) for row in rows]
+        sessions = [_session_from_record(dict(row)) for row in rows]
+        return [session for session in sessions if (_parse_timestamp(session.updated_at) or cutoff) >= cutoff]
 
     def claim_next(self, *, connector_id: str, session_id: str, lease_seconds: int = 60) -> ConnectorCommand | None:
         now = _now()
