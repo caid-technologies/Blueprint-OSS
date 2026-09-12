@@ -326,15 +326,12 @@ def _store_event(session: StoredSession, event: ConnectorEventInput) -> PublicEv
 
 
 def _record_connector_unavailable_if_stale(session: StoredSession) -> None:
-    heartbeat = session.last_heartbeat_at
-    if heartbeat:
-        normalized = heartbeat[:-1] + "+00:00" if heartbeat.endswith("Z") else heartbeat
-        try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(normalized).astimezone(timezone.utc)).total_seconds()
-        except ValueError:
-            age = 0
-    else:
-        age = 10**9
+    last_seen = session.last_heartbeat_at or session.created_at
+    normalized = last_seen[:-1] + "+00:00" if last_seen.endswith("Z") else last_seen
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(normalized).astimezone(timezone.utc)).total_seconds()
+    except ValueError:
+        age = 0
     if age < 120 or session.status != OpenCodeSessionStatus.ACTIVE:
         return
     _store_event(

@@ -1,0 +1,396 @@
+import { expect, test, type Route } from "@playwright/test";
+import type { RuntimeConfigContract } from "../lib/config";
+import type { OpenCodeCommand, OpenCodeEvent, OpenCodeSession } from "../lib/opencode";
+
+const projectId = "746df932-f4ed-49a4-a36e-5a50a22aa918";
+const sessionId = "session-opencode-chat";
+const commandIds = ["command-first-turn", "command-second-turn"];
+const answers = ["Hello from OpenCode.", "Still here in the same OpenCode session."];
+const publishedProject = {
+  project_id: projectId,
+  chat_id: "839aeb42-31d5-4b74-91f8-a93bc3a17db6",
+  can_chat: true,
+  prompt: "hi",
+  project_ir: {
+    overview: {
+      title: "USB-powered status monitor",
+      description: "A minimal low-voltage status monitor using an ESP32 development board.",
+      difficulty: "Beginner",
+      estimated_cost: 5,
+      category: "Monitoring",
+    },
+    components: [{
+      ref_des: "U1",
+      part_number: "ESP32-DevKitC",
+      name: "ESP32 development board",
+      category: "Microcontroller",
+      quantity: 1,
+      unit_price: 5,
+      rationale: "Provides USB power and an onboard controller for the status monitor.",
+      pins: [],
+    }],
+    connections: [],
+    nets: [],
+    assembly: [],
+    constraints: ["Power from 5V USB only."],
+    validation: { critical: [], warning: [], info: [] },
+    // Identity is supplied by the GET envelope, as consumed by withProjectResponseMetadata.
+    assembly_metadata: { workflow: "default", source_prompt: "hi" },
+  },
+};
+
+const runtimeConfig: RuntimeConfigContract = {
+  contract_version: 1,
+  authority: "backend",
+  forma_dev_mode: false,
+  generation: {
+    ready: true,
+    available: true,
+    reason: null,
+    selected_llm: null,
+    llm_options: [],
+  },
+  images: {
+    enabled: false,
+    configured: false,
+    request_capable: false,
+    provider: null,
+    model: null,
+    generate_by_default: false,
+    reason: null,
+  },
+  workflow: {
+    default_id: "default",
+    options: [{ id: "default", label: "Default", description: "Local OpenCode authoring" }],
+  },
+  provider_setup: { required: false, llm_required: false, image_required: false },
+  deployment: {
+    hosted_chat_enabled: false,
+    authoring_mode_enabled: true,
+    authoring_access: true,
+    opencode_connector_id: "mini-pc-1",
+  },
+  video: {
+    generation: { configured: false, reason: null },
+    self_correction: { configured: false, reason: null },
+  },
+};
+
+function event(
+  sequence: number,
+  kind: OpenCodeEvent["kind"],
+  overrides: Partial<OpenCodeEvent> = {},
+): OpenCodeEvent {
+  return {
+    event_id: `event-${sequence}`,
+    sequence,
+    session_id: sessionId,
+    project_id: projectId,
+    kind,
+    status: null,
+    message: null,
+    revision_id: null,
+    error: null,
+    created_at: "2026-09-12T12:00:00Z",
+    ...overrides,
+  };
+}
+
+// FORMA_AUTH_MODE=local must be supplied to the local web server, not mocked in the browser.
+test.use({ serviceWorkers: "block" });
+
+for (const projectPublished of [false, true]) test(`OpenCode chat survives connector recovery with a ${projectPublished ? "published" : "unpublished"} project, reuses its session, and starts a new chat`, async ({ page, baseURL }) => {
+  test.setTimeout(180_000);
+  const appOrigin = new URL(baseURL!).origin;
+  expect(["localhost", "127.0.0.1", "[::1]"]).toContain(new URL(appOrigin).hostname);
+
+  const unexpectedRequests: string[] = [];
+  const pageErrors: string[] = [];
+  const configErrors: string[] = [];
+  const sessionRequests: unknown[] = [];
+  const commandRequests: { path: string; body: unknown }[] = [];
+  const polls: { turn: number; cursor: number }[] = [];
+  const completedTurns: number[] = [];
+  const projectProbes: { turn: number; afterCompletion: boolean }[] = [];
+  const projectResponseStatuses: number[] = [];
+  let originalChatUrl = "";
+  let releaseProgress!: () => void;
+  let releaseCompletion!: () => void;
+  const progressGate = new Promise<void>((resolve) => { releaseProgress = resolve; });
+  const completionGate = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("Error fetching runtime config")) {
+      configErrors.push(message.text());
+    }
+  });
+
+  // Only local app assets/navigation may escape the mocks. Unknown backends fail closed.
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === appOrigin && !/^\/api(?:\/|$)/.test(url.pathname)) {
+      await route.continue();
+      return;
+    }
+    unexpectedRequests.push(`${route.request().method()} ${url.href}`);
+    await route.abort("blockedbyclient");
+  });
+
+  const mockBackend = async (route: Route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^\/api(?=\/|$)/, "") || "/";
+    const method = request.method();
+
+    if (method === "OPTIONS") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (method === "GET" && path === "/runtime/config") {
+      await route.fulfill({ json: runtimeConfig });
+      return;
+    }
+    if (method === "GET" && path === "/") {
+      await route.fulfill({ json: { status: "ok" } });
+      return;
+    }
+    if (method === "GET" && ["/projects", "/my/projects"].includes(path)) {
+      await route.fulfill({ json: {
+        items: [], total: 0, has_more: false,
+        limit: Number(url.searchParams.get("limit") || 6),
+        offset: Number(url.searchParams.get("offset") || 0),
+      } });
+      return;
+    }
+    if (method === "GET" && ["/chats", "/a2a/jobs", "/example-project-object-jobs"].includes(path)) {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    if (method === "GET" && path === "/admin/session") {
+      await route.fulfill({ json: { is_admin: false } });
+      return;
+    }
+    if (method === "GET" && path === "/pipeline/steps") {
+      await route.fulfill({ json: { steps: [] } });
+      return;
+    }
+    if (method === "GET" && path === "/video/models") {
+      await route.fulfill({ json: { models: [], generation_configured: false } });
+      return;
+    }
+    if (method === "POST" && path === "/opencode/sessions") {
+      sessionRequests.push(request.postDataJSON());
+      const session: OpenCodeSession = {
+        session_id: sessionId,
+        connector_id: "mini-pc-1",
+        project_id: projectId,
+        owner_user_id: "local-user",
+        status: "active",
+      };
+      await route.fulfill({ json: session });
+      return;
+    }
+    if (method === "POST" && path === `/opencode/sessions/${sessionId}/commands`) {
+      commandRequests.push({ path, body: request.postDataJSON() });
+      const command: OpenCodeCommand = {
+        command_id: commandIds[commandRequests.length - 1],
+        session_id: sessionId,
+        project_id: projectId,
+        operation: "project_message",
+        status: "queued",
+      };
+      await route.fulfill({ json: command });
+      return;
+    }
+    if (method === "GET" && path === `/opencode/sessions/${sessionId}/events`) {
+      const cursor = Number(url.searchParams.get("cursor"));
+      const turn = commandRequests.length;
+      polls.push({ turn, cursor });
+      let events: OpenCodeEvent[] = [];
+      if (turn === 1 && cursor === 0) {
+        events = [event(1, "connector_unavailable", {
+          event_id: `connector_unavailable_${sessionId}`,
+          message: "Waiting for the local OpenCode connector.",
+        })];
+      } else if (turn === 1 && cursor === 1) {
+        await progressGate;
+        events = [event(2, "queued", { status: "queued" }), event(3, "working", { status: "running" })];
+      } else if ((turn === 1 && cursor === 3) || (turn === 2 && cursor === 5)) {
+        if (turn === 1) await completionGate;
+        const sequence = turn === 1 ? 4 : 6;
+        // The canonical terminal event shares the page with the answer but has no message.
+        events = [
+          event(sequence, "assistant_message", { message: answers[turn - 1] }),
+          event(sequence + 1, "completed", {
+            event_id: `${commandIds[turn - 1]}:terminal`,
+            status: "succeeded",
+          }),
+        ];
+        completedTurns.push(turn);
+      }
+      await route.fulfill({ json: { events, next_cursor: events.at(-1)?.sequence ?? cursor } });
+      return;
+    }
+    if (method === "GET" && path === `/projects/${projectId}`) {
+      const turn = commandRequests.length;
+      projectProbes.push({ turn, afterCompletion: completedTurns.includes(turn) });
+      const status = !projectPublished ? 404 : projectProbes.length === 1 ? 503 : 200;
+      projectResponseStatuses.push(status);
+      await route.fulfill({
+        status,
+        json: status === 200 ? publishedProject : {
+          detail: status === 404 ? "Project not found" : "Project store temporarily unavailable",
+        },
+      });
+      return;
+    }
+
+    unexpectedRequests.push(`${method} ${url.href}`);
+    await route.fulfill({ status: 501, json: { detail: `Unmocked endpoint: ${method} ${path}` } });
+  };
+
+  await page.route("**/api/**", mockBackend);
+  await page.route(/^https?:\/\/(?:localhost|127\.0\.0\.1):8000(?:\/|$)/, mockBackend);
+  await page.clock.install();
+
+  try {
+    try {
+      await page.goto("/", { waitUntil: "domcontentloaded", timeout: 120_000 });
+    } catch (error) {
+      // Match the existing suite's workaround for a first Next dev compilation.
+      if (!String(error).includes("ERR_ABORTED")) throw error;
+      await page.goto("/", { waitUntil: "domcontentloaded", timeout: 120_000 });
+    }
+
+    const composer = page.getByPlaceholder("Describe the product, constraints, references, and outputs you need\u2026", { exact: true });
+    const followUpComposer = projectPublished ? page.getByRole("textbox", { name: /Describe a change to/ }) : composer;
+    const stop = page.getByRole("button", { name: "Stop generation", exact: true });
+    const missingProject = page.getByText(/no longer available in (?:the )?project database/i);
+    const projectLinks = page.locator(`a[href*="${projectId}"]`);
+    const projectOutput = page.getByRole("region", { name: "Project", exact: true });
+    const firstAnswer = page.getByRole("main").getByText(answers[0], { exact: true });
+    const secondAnswer = page.getByRole("main").getByText(answers[1], { exact: true });
+
+    await expect(page.getByRole("status", { name: "OpenCode is authoring this workspace.", exact: true })).toBeVisible();
+    await expect(composer).toBeVisible();
+
+    await test.step("keep polling after connector_unavailable without loading the reserved project", async () => {
+      await composer.fill("hi");
+      await composer.press("Enter");
+      await expect.poll(() => polls).toContainEqual({ turn: 1, cursor: 1 });
+      await expect(page).toHaveURL(/\/chat\/[^/?#]+$/);
+      originalChatUrl = page.url();
+      expect(new URL(originalChatUrl).pathname.split("/").at(-1)).not.toBe(publishedProject.chat_id);
+      await expect(stop).toBeVisible();
+      expect(sessionRequests).toEqual([{ connector_id: "mini-pc-1" }]);
+      expect(projectProbes).toEqual([]);
+      await expect(missingProject).toHaveCount(0);
+      await expect(projectLinks).toHaveCount(0);
+
+      releaseProgress();
+      await expect.poll(() => polls).toContainEqual({ turn: 1, cursor: 3 });
+      await expect(stop).toBeVisible();
+      expect(projectProbes).toEqual([]);
+      await expect(missingProject).toHaveCount(0);
+      await expect(projectLinks).toHaveCount(0);
+    });
+
+    await test.step(projectPublished
+      ? "preserve the answer and original chat URL after canonical completion and a 503 retry"
+      : "preserve the answer after canonical completion and exactly one 404 probe", async () => {
+      releaseCompletion();
+      await expect(firstAnswer).toBeVisible();
+      if (projectPublished) {
+        await expect.poll(() => projectResponseStatuses[0]).toBe(503);
+      } else {
+        await expect(stop).toHaveCount(0);
+        await expect.poll(() => projectProbes).toEqual([{ turn: 1, afterCompletion: true }]);
+      }
+
+      // Advance beyond the poll and hydration retry delays without a wall-clock sleep.
+      await page.clock.runFor(6_000);
+      await expect(stop).toHaveCount(0);
+      await expect(firstAnswer).toBeVisible();
+      await expect(firstAnswer).toHaveCount(1);
+      await expect(missingProject).toHaveCount(0);
+      await expect(page).toHaveURL(originalChatUrl);
+      if (projectPublished) {
+        await expect.poll(() => projectResponseStatuses.slice(0, 2)).toEqual([503, 200]);
+        await expect(projectOutput).toBeVisible();
+        await expect(projectOutput.getByRole("heading", { name: publishedProject.project_ir.overview.title, exact: true })).toBeVisible();
+        await expect(projectOutput.getByText(publishedProject.project_ir.overview.description, { exact: true })).toBeVisible();
+        // Successful publication may also trigger route/inline hydration GETs.
+        expect(projectProbes.every((probe) => probe.turn === 1 && probe.afterCompletion)).toBe(true);
+        expect(projectResponseStatuses.slice(1).every((status) => status === 200)).toBe(true);
+      } else {
+        await expect(projectLinks).toHaveCount(0);
+        await expect(projectOutput).toHaveCount(0);
+        expect(projectProbes).toEqual([{ turn: 1, afterCompletion: true }]);
+      }
+      expect(polls).toEqual([{ turn: 1, cursor: 0 }, { turn: 1, cursor: 1 }, { turn: 1, cursor: 3 }]);
+    });
+
+    await test.step("send a second turn in the same session and original UI chat", async () => {
+      await followUpComposer.fill("Are you still there?");
+      await followUpComposer.press("Enter");
+      await expect(secondAnswer).toBeVisible();
+      await expect(stop).toHaveCount(0);
+      if (projectPublished) {
+        await expect.poll(() => projectProbes).toContainEqual({ turn: 2, afterCompletion: true });
+      } else {
+        await expect.poll(() => projectProbes).toEqual([
+          { turn: 1, afterCompletion: true }, { turn: 2, afterCompletion: true },
+        ]);
+      }
+      await page.clock.runFor(6_000);
+      await expect(firstAnswer).toBeVisible();
+      await expect(firstAnswer).toHaveCount(1);
+      await expect(secondAnswer).toBeVisible();
+      await expect(secondAnswer).toHaveCount(1);
+      await expect(missingProject).toHaveCount(0);
+      await expect(page).toHaveURL(originalChatUrl);
+      if (projectPublished) {
+        await expect(projectOutput).toBeVisible();
+        await expect(projectOutput.getByRole("heading", { name: publishedProject.project_ir.overview.title, exact: true })).toBeVisible();
+        expect(projectProbes.every((probe) => probe.afterCompletion)).toBe(true);
+        expect(projectResponseStatuses.slice(1).every((status) => status === 200)).toBe(true);
+      } else {
+        await expect(projectLinks).toHaveCount(0);
+        expect(projectProbes).toHaveLength(2);
+      }
+      expect(sessionRequests).toEqual([{ connector_id: "mini-pc-1" }]);
+      expect(commandRequests).toEqual(["hi", "Are you still there?"].map((message) => ({
+        path: `/opencode/sessions/${sessionId}/commands`,
+        body: { message, idempotency_key: expect.stringMatching(/^web-.+/) },
+      })));
+      expect(polls).toEqual([
+        { turn: 1, cursor: 0 }, { turn: 1, cursor: 1 }, { turn: 1, cursor: 3 }, { turn: 2, cursor: 5 },
+      ]);
+    });
+
+    await test.step("New chat resets the rendered conversation with legacy hosted chat disabled", async () => {
+      const previousUrl = page.url();
+      const newChat = page.getByRole("button", { name: "New chat", exact: true }).filter({ visible: true });
+      await expect(newChat).toBeEnabled();
+      await followUpComposer.fill("Unsent draft");
+      await newChat.click();
+      await expect(page).not.toHaveURL(previousUrl);
+      await expect(composer).toHaveValue("");
+      await expect(firstAnswer).toHaveCount(0);
+      await expect(secondAnswer).toHaveCount(0);
+      await expect(newChat).toBeDisabled();
+      await expect(page.getByRole("status", { name: "Hosted chat maintenance", exact: true })).toHaveCount(0);
+      await expect(missingProject).toHaveCount(0);
+      await expect(projectLinks).toHaveCount(0);
+      await expect(projectOutput).toHaveCount(0);
+    });
+
+    expect(unexpectedRequests, "Every backend request must be mocked; no external requests may escape").toEqual([]);
+    expect(configErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  } finally {
+    releaseProgress();
+    releaseCompletion();
+  }
+});
