@@ -42,6 +42,7 @@ from forma_core.database import get_project_identity
 
 router = APIRouter(prefix="/opencode", tags=["opencode"])
 OPENCODE_STORE = OpenCodeStore()
+OPENCODE_SESSION_DISCOVERY_IDLE_SECONDS = 15 * 60
 
 
 @router.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -154,7 +155,9 @@ def list_opencode_connector_sessions(
     bootstrap: str | None = Header(default=None, alias="X-Forma-OpenCode-Bootstrap"),
 ) -> ConnectorSessionPage:
     _require_connector_bootstrap(bootstrap)
-    sessions = OPENCODE_STORE.list_connector_sessions(connector_id.strip())
+    sessions = OPENCODE_STORE.list_connector_sessions(
+        connector_id.strip(), idle_after_seconds=OPENCODE_SESSION_DISCOVERY_IDLE_SECONDS,
+    )
     return ConnectorSessionPage(
         sessions=tuple(
             ConnectorSession(session_id=session.session_id, connector_id=session.connector_id, project_id=UUID(session.project_id))

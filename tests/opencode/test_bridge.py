@@ -202,6 +202,24 @@ class OpenCodeBridgeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 reopened.close()
 
+    def test_connector_session_discovery_excludes_idle_sessions_but_command_activity_reactivates_them(self) -> None:
+        now = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
+        with patch("forma_core.opencode.store._now", return_value=now), patch.dict(os.environ, {"FORMA_USER_SECRETS_KEY": "test-key"}, clear=False):
+            store = OpenCodeStore(":memory:")
+            try:
+                idle = store.create_session(session_id="idle", connector_id="mini", owner_user_id="user", project_id=str(uuid4()))
+                active = store.create_session(session_id="active", connector_id="mini", owner_user_id="user", project_id=str(uuid4()))
+                with store._connection() as connection:
+                    connection.execute("UPDATE opencode_sessions SET updated_at = ? WHERE session_id = ?", ("2026-09-12T11:00:00Z", idle.session_id))
+                self.assertEqual([active.session_id], [session.session_id for session in store.list_connector_sessions("mini", idle_after_seconds=900)])
+                store.create_command(
+                    command_id="command", session=idle, operation=OpenCodeOperation.PROJECT_MESSAGE,
+                    idempotency_key="message", message="reactivate",
+                )
+                self.assertEqual({"idle", "active"}, {session.session_id for session in store.list_connector_sessions("mini", idle_after_seconds=900)})
+            finally:
+                store.close()
+
     def test_store_is_session_scoped_renews_leases_and_completes_idempotently(self) -> None:
         first_project_id = str(uuid4())
         second_project_id = str(uuid4())
